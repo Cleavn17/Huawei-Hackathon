@@ -9,6 +9,10 @@ from functools import lru_cache
 def compress(i):
     return base64.b64encode(struct.pack('<i', i).rstrip(b'\x00')).strip(b'=')
 
+def get_maintenance_cost(b, x, xhat):
+    # Copied from evaluation.py
+    return b * (1 + (((1.5)*(x))/xhat * np.log2(((1.5)*(x))/xhat)))
+
 def get_my_solution(demand) -> list:
     demand = pl.DataFrame(demand)
     _, datacenters, servers, selling_prices = [pl.DataFrame(df) for df in load_problem_data()]
@@ -40,9 +44,31 @@ def get_my_solution(demand) -> list:
     DC_SLOTS = {}
     DC_SCOPED_SERVERS = {}
     DC_DEAD_AT = {}
+
+    def expire_ids(ids):
+        combination = set([*dead_ids])
+        drop_condition = F('server_id').is_in(combination)
+        for server in stock.filter(drop_condition).to_dicts():
+            actions.append({
+                "time_step" : t,
+                "datacenter_id" : server["datacenter_id"],
+                "server_generation" : server["server_generation"],
+                "server_id" : server['server_id'],
+                "action" : "dismiss"
+            })
+
+            DC_SERVERS[server["datacenter_id"]] -= 1
+            DC_SLOTS[server["datacenter_id"]] -= server["slots_size"]
+            DC_SCOPED_SERVERS[(server["datacenter_id"], server["server_generation"])] -= 1
+        return stock.filter(~drop_condition)
     
     for t in range(168):
         t = t + 1
+
+        dead_ids = DC_DEAD_AT.get(t, [])
+        if len(dead_ids) > 0:
+            stock = expire_ids(dead_ids)
+    
         existing = { key : data for key, data in stock.group_by(['datacenter_id', 'server_generation']) }
         excess_ids = []
         demand_profiles = []
@@ -92,7 +118,28 @@ def get_my_solution(demand) -> list:
                     assert capacity_remaining >= 0, f"capacity remaining ({capacity_remaining}) ought to be >=0"
                     need = np.clip(servers_needed_to_meet_demand - servers_in_stock, 0, capacity_remaining // slots_size)
 
-                    if t >= server["release_start"] and t <= server["release_end"]:
+                    # Do not purchase chips which will never make
+                    # money to increase endgame P and normalised L
+                    # (due to a lack of new chips).
+                    C = server["capacity"]
+                    P = server["purchase_price"]
+                    R = server["selling_price"]
+                    T = min(50, 168 - t)
+                    energy_costs = T * server["energy_consumption"] * candidate["cost_of_energy"]
+                    maintenance_costs = sum(get_maintenance_cost(server["average_maintenance_fee"], i + 1, server["life_expectancy"]) for i in range(T))
+                    purchasing_price = P
+                    maximum_feasible_profit = C * R * T
+                    # The only guaranteed cost is purchasing
+                    # price. Profit might be rewarded if longevity and
+                    # utilisation increase .etc. Just using a random
+                    # coefficient here to dampen their influence
+                    # slightly.
+                    B = maximum_feasible_profit - purchasing_price - (energy_costs - maintenance_costs) * 0.7
+                    chip_is_possibly_profitable = B > 0
+
+                    # print(f"B is {B} for {G} in {datacenter_id}")
+
+                    if t >= server["release_start"] and t <= server["release_end"] and chip_is_possibly_profitable:
                         buy_actions = [
                             {
                                 "time_step" : t,
@@ -116,28 +163,15 @@ def get_my_solution(demand) -> list:
 
                 elif excess > 1000 or (servers_needed_to_meet_demand == 0 and excess > 0):
                     # only retire the newest servers to keep utilisation metrics up
+
+                    # for some reason, doing eager expiry fucks shit up severely
+                    # new_excess_ids = [*existing[(datacenter_id, G)].sort('time_step')[-excess:]['server_id']]
+                    # stock = expire_ids(new_excess_ids)
+                    
                     excess_ids += [*existing[(datacenter_id, G)].sort('time_step')[-excess:]['server_id']]
-
-
-        dead_ids = DC_DEAD_AT.get(t, [])
-
-        if len(excess_ids) + len(dead_ids) > 0:
-            combination = set([*excess_ids, *dead_ids])
-            drop_condition = F('server_id').is_in(combination)
-            for server in stock.filter(drop_condition).to_dicts():
-                actions.append({
-                    "time_step" : t,
-                    "datacenter_id" : server["datacenter_id"],
-                    "server_generation" : server["server_generation"],
-                    "server_id" : server['server_id'],
-                    "action" : "dismiss"
-                })
-
-                DC_SERVERS[server["datacenter_id"]] -= 1
-                DC_SLOTS[server["datacenter_id"]] -= server["slots_size"]
-                DC_SCOPED_SERVERS[(server["datacenter_id"], server["server_generation"])] -= 1
-
-            stock = stock.filter(~drop_condition)
+        
+        if len(excess_ids) > 0:
+            stock = expire_ids(excess_ids)
 
         slots = { slot['datacenter_id'] : slot['slots_size'] for slot in stock.group_by('datacenter_id').agg(F('slots_size').sum()).to_dicts() }
         print(f"{t:3}:", ", ".join(f"DC{i + 1}: {slots.get(f'DC{i + 1}', 0):6}" for i in range(4)))
