@@ -45,8 +45,8 @@ def get_my_solution(demand) -> list:
     DC_SCOPED_SERVERS = {}
     DC_DEAD_AT = {}
 
-    def expire_ids(ids):
-        combination = set([*dead_ids])
+    def expire_ids(ids, do_book_keeping=True):
+        combination = set([*ids])
         drop_condition = F('server_id').is_in(combination)
         for server in stock.filter(drop_condition).to_dicts():
             actions.append({
@@ -57,9 +57,10 @@ def get_my_solution(demand) -> list:
                 "action" : "dismiss"
             })
 
-            DC_SERVERS[server["datacenter_id"]] -= 1
-            DC_SLOTS[server["datacenter_id"]] -= server["slots_size"]
-            DC_SCOPED_SERVERS[(server["datacenter_id"], server["server_generation"])] -= 1
+            if do_book_keeping:
+                DC_SERVERS[server["datacenter_id"]] -= 1
+                DC_SLOTS[server["datacenter_id"]] -= server["slots_size"]
+                DC_SCOPED_SERVERS[(server["datacenter_id"], server["server_generation"])] -= 1
         return stock.filter(~drop_condition)
     
     for t in range(168):
@@ -70,7 +71,6 @@ def get_my_solution(demand) -> list:
             stock = expire_ids(dead_ids)
     
         existing = { key : data for key, data in stock.group_by(['datacenter_id', 'server_generation']) }
-        excess_ids = []
         demand_profiles = []
 
         # Increases profits by about 10 million
@@ -83,6 +83,30 @@ def get_my_solution(demand) -> list:
                 demand_profiles.append((I, G, A_ig))
 
         demand_profiles = sorted(demand_profiles, key=lambda p: -p[2])
+        
+        expiry_pool = {}
+
+        for I, G, _ in demand_profiles:
+            candidates = datacenters.filter(F('latency_sensitivity') == I).to_dicts()
+            for candidate in candidates:
+                datacenter_id = candidate['datacenter_id']
+                dmnd = int(demand.filter(F('time_step').is_between(t, t + 10) & (F('latency_sensitivity') == I))[G].mean())
+                server = get_server_with_selling_price(I, G)
+                servers_needed_to_meet_demand = dmnd // server['capacity'] // len(candidates)
+                servers_in_stock = DC_SCOPED_SERVERS.get((datacenter_id, G), 0)
+                excess = max(0, servers_in_stock - servers_needed_to_meet_demand)
+                if excess > 1000 or (servers_needed_to_meet_demand == 0 and excess > 0):
+                    if expiry_pool.get(G) is None:
+                        expiry_pool[G] = []
+                    # move the youngest servers to the expiry pool
+                    servers_to_merc = existing[(datacenter_id, G)][-excess:]
+                    # do book keeping here
+                    for server in servers_to_merc.to_dicts():
+                        DC_SERVERS[server["datacenter_id"]] -= 1
+                        DC_SLOTS[server["datacenter_id"]] -= server["slots_size"]
+                        DC_SCOPED_SERVERS[(server["datacenter_id"], server["server_generation"])] -= 1
+                    
+                    expiry_pool[G] += [*servers_to_merc['server_id']]
 
         for I, G, _ in demand_profiles:
 
@@ -98,33 +122,51 @@ def get_my_solution(demand) -> list:
                 server = get_server_with_selling_price(I, G)
                 slots_size = server['slots_size']
 
-                # demand normalised by this server's capacity
                 servers_needed_to_meet_demand = dmnd // server['capacity'] // len(candidates)
-
-                # servers_in_datacenter = stock.filter((F('datacenter_id') == datacenter_id))
-                servers_in_datacenter = DC_SERVERS.get(datacenter_id, 0)
-                # slots_used_in_datacenter = servers_in_datacenter['slots_size'].sum()
+                
                 slots_used_in_datacenter = DC_SLOTS.get(datacenter_id, 0)
                 assert slots_used_in_datacenter <= slots_capacity, "stock must be <=capacity"
-
-                # scoped to the current generation G
-                # servers_in_stock = servers_in_datacenter.filter((F('server_generation') == G))
+                
                 servers_in_stock = DC_SCOPED_SERVERS.get((datacenter_id, G), 0)
-
-                excess = max(0, servers_in_stock - servers_needed_to_meet_demand)
-
-                if excess <= 0:
+                
+                if servers_in_stock < servers_needed_to_meet_demand:
                     capacity_remaining = slots_capacity - slots_used_in_datacenter
                     assert capacity_remaining >= 0, f"capacity remaining ({capacity_remaining}) ought to be >=0"
                     need = np.clip(servers_needed_to_meet_demand - servers_in_stock, 0, capacity_remaining // slots_size)
+                    original_need = need
 
+                    # ASSUME MOVED SERVERS ACT AS FRESH SERVERS (THIS IS FALSE AND MAINTENANCE COST IS MUCH HIGHER, THERE STILL MAY BE NO BREAK EVEN)
+                    pool = expiry_pool.get(G, [])
+                    amount_to_take_from_pool = min(need, len(pool))
+                    if amount_to_take_from_pool > 0:
+                        taken = pool[-amount_to_take_from_pool:]
+                        untaken = pool[:-amount_to_take_from_pool]
+                        expiry_pool[G] = untaken
+                        need -= len(taken)
+                        stock = stock.with_columns(datacenter_id=pl.when(F('server_id').is_in(taken)).then(pl.lit(datacenter_id)).otherwise('datacenter_id'))
+                        move_actions = []
+                        for server_id in taken:
+                            move_actions.append({
+                                "time_step" : t,
+                                "datacenter_id" : datacenter_id,
+                                "server_generation" : G,
+                                "server_id" : server_id,
+                                "action" : "move"
+                            })
+                            
+                        DC_SERVERS[datacenter_id] = DC_SERVERS.get(datacenter_id, 0) + len(taken)
+                        DC_SLOTS[datacenter_id] = DC_SLOTS.get(datacenter_id, 0) + len(taken) * slots_size
+                        DC_SCOPED_SERVERS[(datacenter_id, G)] = DC_SCOPED_SERVERS.get((datacenter_id, G), 0) + len(taken)
+
+                        actions += move_actions
+                            
                     # Do not purchase chips which will never make
                     # money to increase endgame P and normalised L
                     # (due to a lack of new chips).
                     C = server["capacity"]
                     P = server["purchase_price"]
                     R = server["selling_price"]
-                    T = min(50, 168 - t)
+                    T = min(20, 168 - t)
                     energy_costs = T * server["energy_consumption"] * candidate["cost_of_energy"]
                     maintenance_costs = sum(get_maintenance_cost(server["average_maintenance_fee"], i + 1, server["life_expectancy"]) for i in range(T))
                     purchasing_price = P
@@ -134,7 +176,7 @@ def get_my_solution(demand) -> list:
                     # utilisation increase .etc. Just using a random
                     # coefficient here to dampen their influence
                     # slightly.
-                    B = maximum_feasible_profit - purchasing_price - (energy_costs - maintenance_costs) * 0.7
+                    B = maximum_feasible_profit - purchasing_price - (energy_costs - maintenance_costs) * 0.8
                     chip_is_possibly_profitable = B > 0
 
                     # print(f"B is {B} for {G} in {datacenter_id}")
@@ -154,27 +196,31 @@ def get_my_solution(demand) -> list:
                         bought = pl.DataFrame([{**action, "latency_sensitivity" : I, "slots_size" : slots_size } for action in buy_actions], schema=stock_schema)
                         stock = pl.concat([stock, bought])
 
-                        DC_SERVERS[datacenter_id] = servers_in_datacenter + len(bought)
-                        DC_SLOTS[datacenter_id] = slots_used_in_datacenter + len(bought) * slots_size
-                        DC_SCOPED_SERVERS[(datacenter_id, G)] = servers_in_stock + len(bought)
+                        DC_SERVERS[datacenter_id] = DC_SERVERS.get(datacenter_id, 0) + len(bought)
+                        DC_SLOTS[datacenter_id] = DC_SLOTS.get(datacenter_id, 0) + len(bought) * slots_size
+                        DC_SCOPED_SERVERS[(datacenter_id, G)] = DC_SCOPED_SERVERS.get((datacenter_id, G), 0) + len(bought)
                         
                         delta = 5
                         DC_DEAD_AT[t + server['life_expectancy'] - delta] = DC_DEAD_AT.get(t + server['life_expectancy'] - delta, []) + [server['server_id'] for server in buy_actions]
 
-                elif excess > 1000 or (servers_needed_to_meet_demand == 0 and excess > 0):
-                    # only retire the newest servers to keep utilisation metrics up
-
-                    # for some reason, doing eager expiry fucks shit up severely
-                    # new_excess_ids = [*existing[(datacenter_id, G)].sort('time_step')[-excess:]['server_id']]
-                    # stock = expire_ids(new_excess_ids)
-                    
-                    excess_ids += [*existing[(datacenter_id, G)].sort('time_step')[-excess:]['server_id']]
-        
+        excess_ids = []
+        for G in server_generations:
+            excess_ids += expiry_pool.get(G, [])
         if len(excess_ids) > 0:
-            stock = expire_ids(excess_ids)
+            stock = expire_ids(excess_ids, do_book_keeping=False)
 
+        
         slots = { slot['datacenter_id'] : slot['slots_size'] for slot in stock.group_by('datacenter_id').agg(F('slots_size').sum()).to_dicts() }
-        print(f"{t:3}:", ", ".join(f"DC{i + 1}: {slots.get(f'DC{i + 1}', 0):6}" for i in range(4)))
+        _datacenters = { datacenter['datacenter_id'] : datacenter['slots_capacity'] for datacenter in datacenters.to_dicts() }
+
+        for id in _datacenters.keys():
+            db = len(stock.filter(F('datacenter_id') == id))
+            c = DC_SERVERS.get(id, 0)
+            assert c == db, f"Database ({db}) and DC_SERVERS ({c}) are out of sync for {id}"
+            assert DC_SLOTS.get(id, 0) == stock.filter(F('datacenter_id') == id)['slots_size'].sum(), f"Database and DC_SLOTS are out of sync for {id}"
+            for G in server_generations:
+                assert DC_SCOPED_SERVERS.get((id, G), 0) == len(stock.filter((F('server_generation') == G) & (F('datacenter_id') == id))), f"Database and DC_SCOPED_SERVERS are out of sync for {id}"
+        print(f"{t:3}:", ", ".join(f"DC{i + 1}: {slots.get(f'DC{i + 1}', 0):6} ({int(100*(slots.get(f'DC{i + 1}', 0)/_datacenters[f'DC{i + 1}'])):3}%)" for i in range(4)))
 
     return actions
 
