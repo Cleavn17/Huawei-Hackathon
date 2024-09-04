@@ -85,9 +85,10 @@ def get_my_solution(demand) -> list:
         for I in latency_sensitivities:
             for G in server_generations:
                 # Demand with lookahead into the future
+                S = get_server_with_selling_price(I, G)
                 D_ig = IG_dmd[G].filter(F('time_step').is_between(t, t + 10))[I].mean() or 0
                 C_ig = datacenters.filter(F('latency_sensitivity') == I)['slots_capacity'].sum() - IG_existing_sum.get((I, G), 0)
-                A_ig = min(D_ig, C_ig) * get_server_with_selling_price(I, G)["selling_price"]
+                A_ig = min(D_ig, C_ig) * S["selling_price"] - S["energy_consumption"] * datacenters.filter(F('latency_sensitivity') == I)['cost_of_energy'].min()
                 demand_profiles.append((I, G, A_ig))
 
         demand_profiles = sorted(demand_profiles, key=lambda p: -p[2])
