@@ -95,19 +95,20 @@ def get_my_solution(demand) -> list:
         
         expiry_pool = {}
 
+        DBS = { k : v.to_dicts() for [k], v in datacenters.group_by('latency_sensitivity') }
+
         for I, G, _ in demand_profiles:
-            candidates = datacenters.filter(F('latency_sensitivity') == I).to_dicts()
-            for candidate in candidates:
+            for candidate in DBS[I]:
                 datacenter_id = candidate['datacenter_id']
                 dmnd = int(IG_dmd[G].filter(F('time_step').is_between(t, t + 10))[I].mean() or 0)
                 server = get_server_with_selling_price(I, G)
                 servers_needed_to_meet_demand = dmnd // server['capacity']
                 servers_in_stock = DC_SCOPED_SERVERS.get((datacenter_id, G), 0)
                 excess = max(0, servers_in_stock - servers_needed_to_meet_demand)
-                if excess > 1000 or (servers_needed_to_meet_demand == 0 and excess > 0):
+                if excess > 2500 or (servers_needed_to_meet_demand == 0 and excess > 0):
                     if expiry_pool.get(G) is None:
                         expiry_pool[G] = []
-                    # move the youngest servers to the expiry pool
+                    # Don't move unprofitable servers…
                     servers_to_merc = existing[(datacenter_id, G)][-excess:]
                     # do book keeping here
                     for server in servers_to_merc.to_dicts():
@@ -118,9 +119,7 @@ def get_my_solution(demand) -> list:
                     expiry_pool[G] += [*servers_to_merc['server_id']]
         
         for I, G, _ in demand_profiles:
-            # pick at random if more than one candidate is present
-            candidates = datacenters.filter(F('latency_sensitivity') == I).to_dicts()
-            for candidate in candidates:
+            for candidate in DBS[I]:
                 datacenter_id = candidate['datacenter_id']
                 
                 slots_capacity = candidate['slots_capacity']
@@ -138,7 +137,6 @@ def get_my_solution(demand) -> list:
                     assert capacity_remaining >= 0, f"capacity remaining ({capacity_remaining}) ought to be >=0"
                     need = np.clip(servers_needed_to_meet_demand - servers_in_stock, 0, capacity_remaining // slots_size)
                     
-
                     # ASSUME MOVED SERVERS ACT AS FRESH SERVERS (THIS IS FALSE AND MAINTENANCE COST IS MUCH HIGHER, THERE STILL MAY BE NO BREAK EVEN)
                     pool = expiry_pool.get(G, [])
                     amount_to_take_from_pool = min(need, len(pool))
@@ -211,22 +209,42 @@ def get_my_solution(demand) -> list:
         if len(excess_ids) > 0:
             stock = expire_ids(excess_ids, do_book_keeping=False)
 
-        slots = { slot['datacenter_id'] : slot['slots_size'] for slot in stock.group_by('datacenter_id').agg(F('slots_size').sum()).to_dicts() }
-        _datacenters = { datacenter['datacenter_id'] : datacenter['slots_capacity'] for datacenter in datacenters.to_dicts() }
+        # make equivalents which make caches redundant (please god keep this up to date…)
+        # db_scoped_servers = { k : len(v) for k, v in stock.group_by(['datacenter_id', 'server_generation']) }
+        # db_servers = { k : len(v) for [k], v in stock.group_by('datacenter_id') }
+        # db_slots = { k : v['slots_size'].sum() for [k], v in stock.group_by('datacenter_id') }
+        # 
+        # for id in _datacenters.keys():
+        #     db = db_servers.get(id, 0)
+        #     c = DC_SERVERS.get(id, 0)
+        #     assert c == db, f"Database ({db}) and DC_SERVERS ({c}) are out of sync for {id}"
+        #     assert DC_SLOTS.get(id, 0) == db_slots.get(id, 0), f"Database and DC_SLOTS are out of sync for {id}"
+        #     for G in server_generations:
+        #         assert DC_SCOPED_SERVERS.get((id, G), 0) == db_scoped_servers.get((id, G), 0), f"Database and DC_SCOPED_SERVERS are out of sync for {id}"
 
-        # make equivalents which make caches redundant
-        db_scoped_servers = { k : len(v) for k, v in stock.group_by(['datacenter_id', 'server_generation']) }
-        db_servers = { k : len(v) for [k], v in stock.group_by('datacenter_id') }
-        db_slots = { k : v['slots_size'].sum() for [k], v in stock.group_by('datacenter_id') }
-        
-        for id in _datacenters.keys():
-            db = db_servers.get(id, 0)
-            c = DC_SERVERS.get(id, 0)
-            assert c == db, f"Database ({db}) and DC_SERVERS ({c}) are out of sync for {id}"
-            assert DC_SLOTS.get(id, 0) == db_slots.get(id, 0), f"Database and DC_SLOTS are out of sync for {id}"
-            for G in server_generations:
-                assert DC_SCOPED_SERVERS.get((id, G), 0) == db_scoped_servers.get((id, G), 0), f"Database and DC_SCOPED_SERVERS are out of sync for {id}"
-        print(f"{t:3}:", ", ".join(f"DC{i + 1}: {slots.get(f'DC{i + 1}', 0):6} ({int(100*(slots.get(f'DC{i + 1}', 0)/_datacenters[f'DC{i + 1}'])):3}%)" for i in range(4)))
+        K = pl.concat([demand.filter(F('time_step') == t).select('server_generation', I).rename({ I : 'demand' }).with_columns(latency_sensitivity=pl.lit(I)) for I in latency_sensitivities])
+        R = stock.join(servers, on="server_generation", how="inner") \
+            .join(selling_prices, on=["latency_sensitivity", "server_generation"], how="inner") \
+            .select("latency_sensitivity", 'server_generation', 'selling_price', 'capacity') \
+            .group_by(["latency_sensitivity", "server_generation"]) \
+            .agg(F('capacity').sum(), F('selling_price').mean()) \
+            .join(K, on=["server_generation", "latency_sensitivity"], how="inner") \
+            .select("latency_sensitivity", 'server_generation', pl.min_horizontal('capacity', 'demand') * F('selling_price'))['capacity'].sum()
+        C = stock.join(servers, on="server_generation", how="inner").filter(F('time_step') == t)['purchase_price'].sum()
+        P = R - C
+        L = stock.join(servers, on="server_generation", how="inner").select((t - F('time_step') + 1) / F('life_expectancy')).mean().item()
+        U = stock.join(servers, on="server_generation", how="inner") \
+            .select("latency_sensitivity", 'server_generation', 'capacity') \
+            .group_by(["latency_sensitivity", "server_generation"]) \
+            .agg(F('capacity').sum()) \
+            .join(K, on=["server_generation", "latency_sensitivity"], how="inner") \
+            .select("latency_sensitivity", 'server_generation', pl.min_horizontal('capacity', 'demand') / F('capacity'))['capacity'].mean()
+        O = P * L * U
+        print(f"{t:3}: O: {int(O):<11,}, P: {int(P):<11,} (R={int(R):<11,}, C={int(C):11,}), L: {L:3.02}, U: {U:3.02}")
+
+        # slots = { slot['datacenter_id'] : slot['slots_size'] for slot in stock.group_by('datacenter_id').agg(F('slots_size').sum()).to_dicts() }
+        # _datacenters = { datacenter['datacenter_id'] : datacenter['slots_capacity'] for datacenter in datacenters.to_dicts() }
+        # print(f"{t:3}:", ", ".join(f"DC{i + 1}: {slots.get(f'DC{i + 1}', 0):6} ({int(100*(slots.get(f'DC{i + 1}', 0)/_datacenters[f'DC{i + 1}'])):3}%)" for i in range(4)))
 
     return actions
 
