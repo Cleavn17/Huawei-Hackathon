@@ -77,7 +77,7 @@ def get_my_solution(demand) -> list:
         for I in latency_sensitivities:
             for G in server_generations:
                 # Demand with lookahead into the future
-                D_ig = demand.filter(F('time_step').is_between(t, t + 10) & (F('latency_sensitivity') == I))[G].mean()
+                D_ig = demand.filter(F('time_step').is_between(t, t + 10) & (F('server_generation') == G))[I].mean() or 0
                 C_ig = datacenters.filter(F('latency_sensitivity') == I)['slots_capacity'].sum() - stock.filter((F('latency_sensitivity') == I) & (F('server_generation') == G))['slots_size'].sum()
                 A_ig = min(D_ig, C_ig) * get_server_with_selling_price(I, G)["selling_price"]
                 demand_profiles.append((I, G, A_ig))
@@ -90,7 +90,7 @@ def get_my_solution(demand) -> list:
             candidates = datacenters.filter(F('latency_sensitivity') == I).to_dicts()
             for candidate in candidates:
                 datacenter_id = candidate['datacenter_id']
-                dmnd = int(demand.filter(F('time_step').is_between(t, t + 10) & (F('latency_sensitivity') == I))[G].mean())
+                dmnd = int(demand.filter(F('time_step').is_between(t, t + 10) & (F('server_generation') == G))[I].mean() or 0)
                 server = get_server_with_selling_price(I, G)
                 servers_needed_to_meet_demand = dmnd // server['capacity'] // len(candidates)
                 servers_in_stock = DC_SCOPED_SERVERS.get((datacenter_id, G), 0)
@@ -115,25 +115,21 @@ def get_my_solution(demand) -> list:
 
             for candidate in candidates:
                 datacenter_id = candidate['datacenter_id']
+                
                 slots_capacity = candidate['slots_capacity']
-
-                dmnd = int(demand.filter(F('time_step').is_between(t, t + 10) & (F('latency_sensitivity') == I))[G].mean())
-
+                dmnd = int(demand.filter(F('time_step').is_between(t, t + 1) & (F('server_generation') == G))[I].mean() or 0)
                 server = get_server_with_selling_price(I, G)
                 slots_size = server['slots_size']
-
-                servers_needed_to_meet_demand = dmnd // server['capacity'] // len(candidates)
-                
+                servers_needed_to_meet_demand = dmnd // server['capacity'] # // len(candidates)
                 slots_used_in_datacenter = DC_SLOTS.get(datacenter_id, 0)
                 assert slots_used_in_datacenter <= slots_capacity, "stock must be <=capacity"
-                
                 servers_in_stock = DC_SCOPED_SERVERS.get((datacenter_id, G), 0)
-                
                 if servers_in_stock < servers_needed_to_meet_demand:
+                    
                     capacity_remaining = slots_capacity - slots_used_in_datacenter
                     assert capacity_remaining >= 0, f"capacity remaining ({capacity_remaining}) ought to be >=0"
                     need = np.clip(servers_needed_to_meet_demand - servers_in_stock, 0, capacity_remaining // slots_size)
-                    original_need = need
+                    
 
                     # ASSUME MOVED SERVERS ACT AS FRESH SERVERS (THIS IS FALSE AND MAINTENANCE COST IS MUCH HIGHER, THERE STILL MAY BE NO BREAK EVEN)
                     pool = expiry_pool.get(G, [])
@@ -159,14 +155,14 @@ def get_my_solution(demand) -> list:
                         DC_SCOPED_SERVERS[(datacenter_id, G)] = DC_SCOPED_SERVERS.get((datacenter_id, G), 0) + len(taken)
 
                         actions += move_actions
-                            
+                    
                     # Do not purchase chips which will never make
                     # money to increase endgame P and normalised L
                     # (due to a lack of new chips).
                     C = server["capacity"]
                     P = server["purchase_price"]
                     R = server["selling_price"]
-                    T = min(20, 168 - t)
+                    T = min(60, 168 - t)
                     energy_costs = T * server["energy_consumption"] * candidate["cost_of_energy"]
                     maintenance_costs = sum(get_maintenance_cost(server["average_maintenance_fee"], i + 1, server["life_expectancy"]) for i in range(T))
                     purchasing_price = P
@@ -178,8 +174,6 @@ def get_my_solution(demand) -> list:
                     # slightly.
                     B = maximum_feasible_profit - purchasing_price - (energy_costs - maintenance_costs) * 0.8
                     chip_is_possibly_profitable = B > 0
-
-                    # print(f"B is {B} for {G} in {datacenter_id}")
 
                     if t >= server["release_start"] and t <= server["release_end"] and chip_is_possibly_profitable:
                         buy_actions = [
@@ -209,7 +203,6 @@ def get_my_solution(demand) -> list:
         if len(excess_ids) > 0:
             stock = expire_ids(excess_ids, do_book_keeping=False)
 
-        
         slots = { slot['datacenter_id'] : slot['slots_size'] for slot in stock.group_by('datacenter_id').agg(F('slots_size').sum()).to_dicts() }
         _datacenters = { datacenter['datacenter_id'] : datacenter['slots_capacity'] for datacenter in datacenters.to_dicts() }
 

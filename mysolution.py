@@ -4,17 +4,18 @@ import pandas as pd
 from seeds import known_seeds
 from utils import save_solution
 from evaluation import get_actual_demand
+from naive import get_my_solution
 
+from argparse import ArgumentParser
+parser = ArgumentParser()
+parser.add_argument('--seed', required=False, type=int)
+args = parser.parse_args()
 
-def get_my_solution(d):
-    # This is just a placeholder.
-    return [{}]
-
-
-seeds = known_seeds('training')
+seeds = [args.seed] if args.seed is not None else known_seeds('test')
 
 demand = pd.read_csv('./data/demand.csv')
 for seed in seeds:
+    print(f"RUNNING WITH SEED {seed}")
     # SET THE RANDOM SEED
     np.random.seed(seed)
 
