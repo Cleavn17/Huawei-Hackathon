@@ -5,6 +5,7 @@ import json
 import polars as pl
 from polars import col as F
 from functools import lru_cache
+from line_profiler import profile
 
 def compress(i):
     return base64.b64encode(struct.pack('<i', i).rstrip(b'\x00')).strip(b'=')
@@ -13,6 +14,7 @@ def get_maintenance_cost(b, x, xhat):
     # Copied from evaluation.py
     return b * (1 + (((1.5)*(x))/xhat * np.log2(((1.5)*(x))/xhat)))
 
+@profile
 def get_my_solution(demand) -> list:
     demand = pl.DataFrame(demand)
     _, datacenters, servers, selling_prices = [pl.DataFrame(df) for df in load_problem_data()]
@@ -45,10 +47,13 @@ def get_my_solution(demand) -> list:
     DC_SCOPED_SERVERS = {}
     DC_DEAD_AT = {}
 
+    @profile
     def expire_ids(ids, do_book_keeping=True):
         combination = set([*ids])
         drop_condition = F('server_id').is_in(combination)
-        for server in stock.filter(drop_condition).to_dicts():
+        split = { k : v for [k], v in stock.group_by(drop_condition) }
+        dropped, retained = split.get(True, pl.DataFrame(schema=stock_schema)), split.get(False, pl.DataFrame(schema=stock_schema))
+        for server in dropped.to_dicts():
             actions.append({
                 "time_step" : t,
                 "datacenter_id" : server["datacenter_id"],
@@ -61,7 +66,7 @@ def get_my_solution(demand) -> list:
                 DC_SERVERS[server["datacenter_id"]] -= 1
                 DC_SLOTS[server["datacenter_id"]] -= server["slots_size"]
                 DC_SCOPED_SERVERS[(server["datacenter_id"], server["server_generation"])] -= 1
-        return stock.filter(~drop_condition)
+        return retained
     
     for t in range(168):
         t = t + 1
@@ -74,11 +79,14 @@ def get_my_solution(demand) -> list:
         demand_profiles = []
 
         # Increases profits by about 10 million
+        IG_existing_sum = { k : v['slots_size'].sum() for k, v in stock.group_by(['latency_sensitivity', 'server_generation']) }
+        IG_dmd = { G : v for [G], v in demand.group_by('server_generation') }
+        
         for I in latency_sensitivities:
             for G in server_generations:
                 # Demand with lookahead into the future
-                D_ig = demand.filter(F('time_step').is_between(t, t + 10) & (F('server_generation') == G))[I].mean() or 0
-                C_ig = datacenters.filter(F('latency_sensitivity') == I)['slots_capacity'].sum() - stock.filter((F('latency_sensitivity') == I) & (F('server_generation') == G))['slots_size'].sum()
+                D_ig = IG_dmd[G].filter(F('time_step').is_between(t, t + 10))[I].mean() or 0
+                C_ig = datacenters.filter(F('latency_sensitivity') == I)['slots_capacity'].sum() - IG_existing_sum.get((I, G), 0)
                 A_ig = min(D_ig, C_ig) * get_server_with_selling_price(I, G)["selling_price"]
                 demand_profiles.append((I, G, A_ig))
 
@@ -90,9 +98,9 @@ def get_my_solution(demand) -> list:
             candidates = datacenters.filter(F('latency_sensitivity') == I).to_dicts()
             for candidate in candidates:
                 datacenter_id = candidate['datacenter_id']
-                dmnd = int(demand.filter(F('time_step').is_between(t, t + 10) & (F('server_generation') == G))[I].mean() or 0)
+                dmnd = int(IG_dmd[G].filter(F('time_step').is_between(t, t + 10))[I].mean() or 0)
                 server = get_server_with_selling_price(I, G)
-                servers_needed_to_meet_demand = dmnd // server['capacity'] // len(candidates)
+                servers_needed_to_meet_demand = dmnd // server['capacity']
                 servers_in_stock = DC_SCOPED_SERVERS.get((datacenter_id, G), 0)
                 excess = max(0, servers_in_stock - servers_needed_to_meet_demand)
                 if excess > 1000 or (servers_needed_to_meet_demand == 0 and excess > 0):
@@ -107,17 +115,16 @@ def get_my_solution(demand) -> list:
                         DC_SCOPED_SERVERS[(server["datacenter_id"], server["server_generation"])] -= 1
                     
                     expiry_pool[G] += [*servers_to_merc['server_id']]
-
+        
         for I, G, _ in demand_profiles:
-
             # pick at random if more than one candidate is present
             candidates = datacenters.filter(F('latency_sensitivity') == I).to_dicts()
-
             for candidate in candidates:
                 datacenter_id = candidate['datacenter_id']
                 
                 slots_capacity = candidate['slots_capacity']
-                dmnd = int(demand.filter(F('time_step').is_between(t, t + 1) & (F('server_generation') == G))[I].mean() or 0)
+                dmnd = int(IG_dmd[G].filter(F('time_step').is_between(t, t + 1))[I].mean() or 0)
+                # dmnd = int(demand.filter(F('time_step').is_between(t, t + 1) & (F('server_generation') == G))[I].mean() or 0)
                 server = get_server_with_selling_price(I, G)
                 slots_size = server['slots_size']
                 servers_needed_to_meet_demand = dmnd // server['capacity'] # // len(candidates)
@@ -206,13 +213,18 @@ def get_my_solution(demand) -> list:
         slots = { slot['datacenter_id'] : slot['slots_size'] for slot in stock.group_by('datacenter_id').agg(F('slots_size').sum()).to_dicts() }
         _datacenters = { datacenter['datacenter_id'] : datacenter['slots_capacity'] for datacenter in datacenters.to_dicts() }
 
+        # make equivalents which make caches redundant
+        db_scoped_servers = { k : len(v) for k, v in stock.group_by(['datacenter_id', 'server_generation']) }
+        db_servers = { k : len(v) for [k], v in stock.group_by('datacenter_id') }
+        db_slots = { k : v['slots_size'].sum() for [k], v in stock.group_by('datacenter_id') }
+        
         for id in _datacenters.keys():
-            db = len(stock.filter(F('datacenter_id') == id))
+            db = db_servers.get(id, 0)
             c = DC_SERVERS.get(id, 0)
             assert c == db, f"Database ({db}) and DC_SERVERS ({c}) are out of sync for {id}"
-            assert DC_SLOTS.get(id, 0) == stock.filter(F('datacenter_id') == id)['slots_size'].sum(), f"Database and DC_SLOTS are out of sync for {id}"
+            assert DC_SLOTS.get(id, 0) == db_slots.get(id, 0), f"Database and DC_SLOTS are out of sync for {id}"
             for G in server_generations:
-                assert DC_SCOPED_SERVERS.get((id, G), 0) == len(stock.filter((F('server_generation') == G) & (F('datacenter_id') == id))), f"Database and DC_SCOPED_SERVERS are out of sync for {id}"
+                assert DC_SCOPED_SERVERS.get((id, G), 0) == db_scoped_servers.get((id, G), 0), f"Database and DC_SCOPED_SERVERS are out of sync for {id}"
         print(f"{t:3}:", ", ".join(f"DC{i + 1}: {slots.get(f'DC{i + 1}', 0):6} ({int(100*(slots.get(f'DC{i + 1}', 0)/_datacenters[f'DC{i + 1}'])):3}%)" for i in range(4)))
 
     return actions
