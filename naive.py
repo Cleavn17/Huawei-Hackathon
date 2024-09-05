@@ -134,17 +134,14 @@ def get_my_solution(demand) -> list:
 
                 D_ig = int(IG_dmd[G].filter(F('time_step').is_between(t, t + 10))[I].mean() or 0)
                 # D_ig = int(IG_dmd[G].filter(F('time_step') == t)[I].mean() or 0)
+                
                 server = get_server_with_selling_price(I, G)
                 servers_needed_to_meet_demand = D_ig // server['capacity']
                 servers_needed_to_meet_demand_next = D_ig_next // server['capacity']
                 servers_in_stock = DC_SCOPED_SERVERS.get((datacenter_id, G), 0)
-                Z_ig = servers_in_stock * server['capacity']
-                
-                try:
-                    utilisation = min(D_ig, Z_ig) / Z_ig
-                except ZeroDivisionError:
-                    utilisation = 1.0
-                    
+
+                # We do this to prevent selling a chip in one time step only to need it again in the next timestep due to the random noise added to
+                # the demand in the evaluation script. Though it's impact seems to be negligible
                 excess = max(0, servers_in_stock - max(servers_needed_to_meet_demand, servers_needed_to_meet_demand_next))
                 
                 if excess > 0:
