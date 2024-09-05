@@ -21,21 +21,21 @@ def projected_fleet_profit(n, cost_of_energy, server, demands, t, break_even_per
     scenarios = []
     capacity = n * server["capacity"]
     if ages is None:
-        ages = np.broadcast_to(np.array([1]), n)
+        ages = np.broadcast_to(1, n)
     for ratio in range(steps):
         scalar = (steps - ratio) / steps
         scaled_need = int(n * scalar)
-        profit_earned = initial_balance_per_server * scaled_need
+        balance = initial_balance_per_server * scaled_need
         for k in range(t, min(t + lookahead, 168 + 1)):
             capacity_served = min(capacity, demands.get(k) or 0)
             energy_costs = server["energy_consumption"] * cost_of_energy
             maintenance_costs = get_maintenance_cost(server["average_maintenance_fee"], ages + (k - t), server["life_expectancy"]).sum()
             revenue = capacity_served * server["selling_price"]
             profit = revenue - scaled_need * energy_costs - maintenance_costs
-            profit_earned += profit
-        # extrapolate to break-even and then some
-        if profit_earned > scaled_need * break_even_per_server or all:
-            scenarios.append((scalar, profit_earned))
+            balance += profit
+            # extrapolate to break-even and then some
+        if balance > scaled_need * break_even_per_server or all:
+            scenarios.append((scalar, balance))
     return scenarios
 
 def compress(i):
@@ -135,6 +135,7 @@ def get_my_solution(demand) -> list:
         expiry_list = []
         
         for I, G, _ in demand_profiles:
+            # need to make more wholistic …
             for candidate in DBS[I]:
                 datacenter_id = candidate['datacenter_id']
                 
@@ -151,10 +152,14 @@ def get_my_solution(demand) -> list:
                 servers_needed_to_meet_demand = D_ig // server['capacity']
                 servers_needed_to_meet_demand_next = D_ig_next // server['capacity']
                 servers_in_stock = DC_SCOPED_SERVERS.get((datacenter_id, G), 0)
+                # servers_in_stock = sum(DC_SCOPED_SERVERS.get((candidate['datacenter_id'], G), 0) for candidate in DBS[I])
 
                 # We do this to prevent selling a chip in one time step only to need it again in the next timestep due to the random noise added to
                 # the demand in the evaluation script. Though it's impact seems to be negligible
                 excess = max(0, servers_in_stock - max(servers_needed_to_meet_demand, servers_needed_to_meet_demand_next))
+
+                if G not in expiry_pool:
+                    expiry_pool[G] = []
                 
                 if excess > 0:
                     demands = { d['time_step'] : d[I] for d in IG_dmd[G]['time_step', I].to_dicts() }
@@ -163,11 +168,7 @@ def get_my_solution(demand) -> list:
                     W = sorted(W, key=lambda p: -p[1])
                     excess = int((excess + servers_in_stock - servers_in_stock * W[-1][0]) / 2)
 
-                if G not in expiry_pool:
-                    expiry_pool[G] = []
-                
-                # if excess > 0 and (utilisation < 0.9 or servers_needed_to_meet_demand == 0):
-                if excess > 0:
+                # if (utilisation < 0.9 or servers_needed_to_meet_demand == 0):
                     servers_to_merc = existing[(datacenter_id, G)].sort('time_step')[-excess:]
                     for server in servers_to_merc.to_dicts():
                         DC_SERVERS[server["datacenter_id"]] -= 1
@@ -226,16 +227,10 @@ def get_my_solution(demand) -> list:
                     # NEED TO AUGMENT SIMULATED PROFITABILITY PLANNING
 
                     if need > 0:
-                        C = server["capacity"]
                         P = server["purchase_price"]
-                        R = server["selling_price"]
-                        
-                        # ASSUMING THAT IG → DC is bijective, need to handle the double high using a real query
-                        existing_capacity = sum(DC_SCOPED_SERVERS.get((candidate['datacenter_id'], G), 0) * C for candidate in DBS[I])
-
+                        existing_capacity = sum(DC_SCOPED_SERVERS.get((candidate['datacenter_id'], G), 0) * server["capacity"] for candidate in DBS[I])
                         # Assume that when the demand falls below the existing capacity, no capacity will go to the new servers
                         demands = { d['time_step'] : max(0, d[I] - existing_capacity)  for d in IG_dmd[G]['time_step', I].to_dicts() }
-                        
                         profitable_scenarios = projected_fleet_profit(
                             n=need,
                             cost_of_energy=candidate["cost_of_energy"],
@@ -247,7 +242,6 @@ def get_my_solution(demand) -> list:
                         )
                         is_profitable_scenario = len(profitable_scenarios) != 0
                         profitable_scenarios = sorted(profitable_scenarios, key=lambda m: m[1])
-
                         if is_profitable_scenario and len(profitable_scenarios):
                             best_scale, _ = profitable_scenarios[-1]
                             formatted = [f'{scalar} €{int(profit_earned):,}' for scalar, profit_earned in profitable_scenarios]
