@@ -77,7 +77,7 @@ def get_my_solution(demand) -> list:
         if len(dead_ids) > 0:
             stock = expire_ids(dead_ids)
     
-        existing = { key : data for key, data in stock.group_by(['datacenter_id', 'server_generation']) }
+        existing = { k : v for k, v in stock.group_by(['datacenter_id', 'server_generation']) }
         demand_profiles = []
 
         # Increases profits by about 10 million
@@ -127,11 +127,12 @@ def get_my_solution(demand) -> list:
                     utilisation = 1.0
                     
                 excess = max(0, servers_in_stock - max(servers_needed_to_meet_demand, servers_needed_to_meet_demand_next))
+
+                if G not in expiry_pool:
+                    expiry_pool[G] = []
                 
-                if utilisation < 0.9 or (servers_needed_to_meet_demand == 0 and excess > 0):
+                if excess > 0 and (utilisation < 0.9 or servers_needed_to_meet_demand == 0):
                 # if excess > 1000 or (servers_needed_to_meet_demand == 0 and excess > 0):
-                    if expiry_pool.get(G) is None:
-                        expiry_pool[G] = []
                     # Don't move unprofitable servers…
                     servers_to_merc = existing[(datacenter_id, G)].sort('time_step')[-excess:]
                     # do book keeping here
@@ -171,16 +172,15 @@ def get_my_solution(demand) -> list:
                         untaken = pool[:-amount_to_take_from_pool]
                         expiry_pool[G] = untaken
                         need -= len(taken)
-                        hmm = { k : v for [k], v in stock.filter(F('server_id').is_in(taken)).group_by(F('datacenter_id') == datacenter_id) }
+                        moved = stock.filter(F('server_id').is_in(taken) & (F('datacenter_id') != datacenter_id))
                         stock = stock.with_columns(datacenter_id=pl.when(F('server_id').is_in(taken)).then(pl.lit(datacenter_id)).otherwise('datacenter_id')) # just rename all that shit
-                        moved = hmm[False].to_dicts() if False in hmm else []
                         move_actions = []
-                        for server_id in moved:
+                        for _server in moved.to_dicts():
                             move_actions.append({
                                 "time_step" : t,
                                 "datacenter_id" : datacenter_id,
                                 "server_generation" : G,
-                                "server_id" : server_id,
+                                "server_id" : _server['server_id'],
                                 "action" : "move"
                             })
 
