@@ -320,6 +320,7 @@ def get_my_solution(demand) -> list:
         db_servers = { k : len(v) for [k], v in stock.group_by('datacenter_id') }
         db_slots = { k : v['slots_size'].sum() for [k], v in stock.group_by('datacenter_id') }
         for id in _datacenters.keys():
+            assert stock.filter((F('datacenter_id') == id))['slots_size'].sum() <= datacenters.filter(F('datacenter_id') == id)['slots_capacity'].item(), "Constraint 2 violated"
             db = db_servers.get(id, 0)
             c = DC_SERVERS.get(id, 0)
             assert c == db, f"Database ({db}) and DC_SERVERS ({c}) are out of sync for {id}"
