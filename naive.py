@@ -26,7 +26,7 @@ def projected_fleet_profit(n, cost_of_energy, server, demands, t, break_even_per
         scalar = (steps - ratio) / steps
         scaled_need = int(n * scalar)
         profit_earned = initial_balance_per_server * scaled_need
-        for k in range(t, min(t + lookahead, 169)):
+        for k in range(t, min(t + lookahead, 168 + 1)):
             capacity_served = min(capacity, demands.get(k) or 0)
             energy_costs = server["energy_consumption"] * cost_of_energy
             maintenance_costs = get_maintenance_cost(server["average_maintenance_fee"], ages + (k - t), server["life_expectancy"]).sum()
