@@ -4,7 +4,7 @@ import logging
 import numpy as np
 import pandas as pd
 from scipy.stats import truncweibull_min
-
+from line_profiler import profile
 
 # CREATE LOGGER
 logger = logging.getLogger()
@@ -68,7 +68,7 @@ def solution_data_preparation(solution, servers, datacenters, selling_prices):
                               how='left')
     # CHECK IF SERVERS ARE USED AT THE RIGHT RELEASE TIME
     solution = check_server_usage_by_release_time(solution)
-    # DROP DUPLICATE SERVERS IDs
+   # DROP DUPLICATE SERVERS IDs
     solution = drop_duplicate_server_ids(solution)
     return solution.reset_index(drop=True, inplace=False)
 
@@ -255,7 +255,7 @@ def get_profit(D, Z, selling_prices, fleet):
     # CALCULATE OBJECTIVE P = PROFIT
     R = get_revenue(D, Z, selling_prices)
     C = get_cost(fleet)
-    return R - C
+    return R, C
 
 
 def get_revenue(D, Z, selling_prices):
@@ -272,35 +272,28 @@ def get_revenue(D, Z, selling_prices):
     return r
 
 
+@profile
 def get_cost(fleet):
-    # CALCULATE THE SERVER COST - PART 1
-    fleet['cost'] = fleet.apply(calculate_server_cost, axis=1)
-    return fleet['cost'].sum()
-
-
-def calculate_server_cost(row):
-    # CALCULATE THE SERVER COST - PART 2
-    c = 0
-    r = row['purchase_price']
-    b = row['average_maintenance_fee']
-    x = row['lifespan']
-    xhat = row['life_expectancy']
-    e = row['energy_consumption'] * row['cost_of_energy']
-    c += e
-    alpha_x = get_maintenance_cost(b, x, xhat)
-    c += alpha_x
-    if x == 1:
-        c += r
-    elif row['moved'] == 1:
-        c += row['cost_of_moving']
-    return c
-
+    F = 0.0
+    for _, row in fleet.groupby(['datacenter_id', 'server_generation']):
+        X = row['lifespan'].values
+        XHAT = row['life_expectancy'].iloc[0]
+        R = len(X[X == 1]) * row['purchase_price'].iloc[0]
+        B = row['average_maintenance_fee'].iloc[0]
+        E = len(X) * row['energy_consumption'].iloc[0] * row['cost_of_energy'].iloc[0]
+        M = get_maintenance_cost(B, X, XHAT).sum()
+        MD = row['moved'].values
+        V = (MD[np.isfinite(MD)] * row['cost_of_moving'].iloc[0]).sum()
+        F += V + M + E + R
+    return F
 
 def get_maintenance_cost(b, x, xhat):
     # CALCULATE THE CURRENT MAINTENANCE COST
     return b * (1 + (((1.5)*(x))/xhat * np.log2(((1.5)*(x))/xhat)))
 
 
+
+@profile
 def update_fleet(ts, fleet, solution):
     # UPADATE THE FLEET ACCORDING TO THE ACTIONS AT THE CURRENT TIMESTEP
     if fleet.empty:
@@ -323,7 +316,8 @@ def update_fleet(ts, fleet, solution):
             # do nothing
         # DISMISS
         if 'dismiss' in server_id_action:
-            fleet = fleet.drop(index=server_id_action['dismiss'], inplace=False)
+            # fleet = fleet.drop(index=server_id_action['dismiss'], inplace=False)
+            fleet.drop(index=server_id_action['dismiss'], inplace=True)
     fleet = update_check_lifespan(fleet)
     return fleet
 
@@ -339,10 +333,12 @@ def update_check_lifespan(fleet):
     # LIFE EXPECTANCY
     fleet['lifespan'] = fleet['lifespan'].fillna(0)
     fleet['lifespan'] += 1
-    fleet = fleet.drop(fleet.index[fleet['lifespan'] > fleet['life_expectancy']], inplace=False)
+    # fleet = fleet.drop(fleet.index[fleet['lifespan'] > fleet['life_expectancy']], inplace=False)
+    fleet.drop(fleet.index[fleet['lifespan'] > fleet['life_expectancy']], inplace=True)
     return fleet
 
 
+@profile
 def get_evaluation(solution, 
                    demand,
                    datacenters,
@@ -394,11 +390,12 @@ def get_evaluation(solution,
             U = get_utilization(D, Zf)
     
             L = get_normalized_lifespan(FLEET)
-    
-            P = get_profit(D, 
+
+            R, C = get_profit(D, 
                            Zf, 
                            selling_prices,
                            FLEET)
+            P = R - C
             o = U * L * P
             OBJECTIVE += o
 
@@ -407,10 +404,13 @@ def get_evaluation(solution,
 
             # PREPARE OUTPUT
             output = {'time-step': ts,
-                      'O': round(OBJECTIVE, 2),
+                      'O': round(OBJECTIVE.item(), 2),
+                      'ẟo': round(o.item(), 2),
                       'U': round(U, 2),
-                      'L': round(L, 2),
-                      'P': round(P, 2)}
+                      'L': round(L.item(), 2),
+                      'P': round(P.item(), 2),
+                      'R': round(R.item(), 2),
+                      'C': round(C.item(), 2)}
         else:
             # PREPARE OUTPUT
             output = {'time-step': ts,
