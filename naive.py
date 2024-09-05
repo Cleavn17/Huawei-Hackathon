@@ -59,7 +59,9 @@ def get_my_solution(demand) -> list:
     i = 1
     actions = []
     server_generations = ["GPU.S1", "GPU.S2", "GPU.S3", "CPU.S1", "CPU.S2", "CPU.S3", "CPU.S4"]
+    # server_generations = ["CPU.S1"]
     latency_sensitivities = ["low", "high", "medium"]
+    # latency_sensitivities = ["low"]
 
     stock_schema = {
         'time_step' : pl.Int64,
@@ -112,6 +114,7 @@ def get_my_solution(demand) -> list:
         demand_profiles = []
 
         # Increases profits by about 10 million
+        DBS = { k : v.to_dicts() for [k], v in datacenters.group_by('latency_sensitivity') }
         IG_existing_sum = { k : v['slots_size'].sum() for k, v in stock.group_by(['latency_sensitivity', 'server_generation']) }
         IG_dmd = { G : v for [G], v in demand.group_by('server_generation') }
         
@@ -128,14 +131,13 @@ def get_my_solution(demand) -> list:
         demand_profiles = sorted(demand_profiles, key=lambda p: -p[2])
         
         expiry_pool = {}
-
-        DBS = { k : v.to_dicts() for [k], v in datacenters.group_by('latency_sensitivity') }
-
+        
         expiry_list = []
         
         for I, G, _ in demand_profiles:
             for candidate in DBS[I]:
                 datacenter_id = candidate['datacenter_id']
+                
                 D_ig_old = int(IG_dmd[G].filter(F('time_step').is_between(t - 1, t - 1 + 10))[I].mean() or 0)
                 # D_ig_old = int(IG_dmd[G].filter(F('time_step') == t - 1)[I].mean() or 0)
 
@@ -227,13 +229,9 @@ def get_my_solution(demand) -> list:
                         C = server["capacity"]
                         P = server["purchase_price"]
                         R = server["selling_price"]
-                        M = server["average_maintenance_fee"]
-                        XHAT = server["life_expectancy"]
-
-                        target_additional_capacity = need * C
                         
                         # ASSUMING THAT IG → DC is bijective, need to handle the double high using a real query
-                        existing_capacity = DC_SCOPED_SERVERS.get((datacenter_id, G), 0) * C
+                        existing_capacity = sum(DC_SCOPED_SERVERS.get((candidate['datacenter_id'], G), 0) * C for candidate in DBS[I])
 
                         # Assume that when the demand falls below the existing capacity, no capacity will go to the new servers
                         demands = { d['time_step'] : max(0, d[I] - existing_capacity)  for d in IG_dmd[G]['time_step', I].to_dicts() }
