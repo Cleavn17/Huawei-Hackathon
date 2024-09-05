@@ -6,6 +6,16 @@ import polars as pl
 from polars import col as F
 from functools import lru_cache
 from line_profiler import profile
+import logging
+from sys import stdout
+from os import environ
+
+handler = logging.StreamHandler(stdout)
+handler.setLevel(getattr(logging, environ.get('NAIVE_LOG_LEVEL', 'DEBUG')))
+
+logger = logging.getLogger("naive")
+logger.setLevel(logging.DEBUG)
+logger.addHandler(handler)
 
 def projected_fleet_profit(n, cost_of_energy, server, demands, t, break_even_per_server=0.0, initial_balance_per_server=0.0, lookahead=90, steps=1, all=False, ages=None):
     scenarios = []
@@ -161,7 +171,7 @@ def get_my_solution(demand) -> list:
                         DC_SERVERS[server["datacenter_id"]] -= 1
                         DC_SLOTS[server["datacenter_id"]] -= server["slots_size"]
                         DC_SCOPED_SERVERS[(server["datacenter_id"], server["server_generation"])] -= 1
-                    print(f"\tExpiring {len(servers_to_merc):5,} of {I}-{G} ({D_ig_old:,} 📉 {D_ig:,})")
+                    logger.debug(f"\tExpiring {len(servers_to_merc):5,} of {I}-{G} ({D_ig_old:,} 📉 {D_ig:,})")
                     expiry_list.append(f'{I}-{G}')
                     expiry_pool[G] += [*servers_to_merc['server_id']]
 
@@ -203,7 +213,7 @@ def get_my_solution(demand) -> list:
                                 "action" : "move"
                             })
 
-                        print(f"\tHarvisting {len(taken):,} of {I}-{G} from expiry pool for €{len(moved)*server['cost_of_moving']:,} (ẟ{len(taken)*server['capacity']:,} to meet {D_ig:,})")
+                        logger.debug(f"\tHarvisting {len(taken):,} of {I}-{G} from expiry pool for €{len(moved)*server['cost_of_moving']:,} (ẟ{len(taken)*server['capacity']:,} to meet {D_ig:,})")
                             
                         DC_SERVERS[datacenter_id] = DC_SERVERS.get(datacenter_id, 0) + len(taken)
                         DC_SLOTS[datacenter_id] = DC_SLOTS.get(datacenter_id, 0) + len(taken) * slots_size
@@ -243,18 +253,18 @@ def get_my_solution(demand) -> list:
                         if is_profitable_scenario and len(profitable_scenarios):
                             best_scale, _ = profitable_scenarios[-1]
                             formatted = [f'{scalar} €{int(profit_earned):,}' for scalar, profit_earned in profitable_scenarios]
-                            print(f"\tBest choice is: '{formatted[-1]}', others: {formatted[:-1]}")
+                            logger.debug(f"\tBest choice is: '{formatted[-1]}', others: {formatted[:-1]}")
                             need = int(need * best_scale)
-                            print(f"\tBuy {need} more {I}-{G} servers for €{int(need*P):,}!")
+                            logger.debug(f"\tBuy {need} more {I}-{G} servers for €{int(need*P):,}!")
                         else:
-                            print(f"\tDon't drop €{int(need*P):,} on {need} more {I}-{G} servers! ")
+                            logger.debug(f"\tDon't drop €{int(need*P):,} on {need} more {I}-{G} servers! ")
 
                         if t >= server["release_start"] and t <= server["release_end"] and is_profitable_scenario:
                             if f'{I}-{G}' in old_expiry_list:
                                 warning = f"([38;2;255;0;0m🤡 {I}-{G} was expired last round! 🤡[m)"
                             else:
                                 warning = ""
-                            print(f"\tPurchasing {need:,} of {I}-{G} for €{int(need * server["purchase_price"]):,} (ẟ{need * server["capacity"]:,} to meet {D_ig:,}) {warning}")
+                            logger.debug(f"\tPurchasing {need:,} of {I}-{G} for €{int(need * server["purchase_price"]):,} (ẟ{need * server["capacity"]:,} to meet {D_ig:,}) {warning}")
 
                             buy_actions = [
                                 {
@@ -304,11 +314,11 @@ def get_my_solution(demand) -> list:
             .join(K, on=["server_generation", "latency_sensitivity"], how="inner") \
             .select("latency_sensitivity", 'server_generation', pl.min_horizontal('capacity', 'demand') / F('capacity'))['capacity'].mean() or 0.0
         O = P * L * U
-        print(f"{t:3}: O: {int(O):<11,}, P: {int(P):<11,} (R={int(R):<11,}, C={int(C):11,},  E={int(E):11,}), L: {L:3.02}, U: {U:3.02}")
+        logger.debug(f"{t:3}: O: {int(O):<11,}, P: {int(P):<11,} (R={int(R):<11,}, C={int(C):11,},  E={int(E):11,}), L: {L:3.02}, U: {U:3.02}")
 
         slots = { slot['datacenter_id'] : slot['slots_size'] for slot in stock.group_by('datacenter_id').agg(F('slots_size').sum()).to_dicts() }
         _datacenters = { datacenter['datacenter_id'] : datacenter['slots_capacity'] for datacenter in datacenters.to_dicts() }
-        print(f"{t:3}:", ", ".join(f"DC{i + 1}: {slots.get(f'DC{i + 1}', 0):6} ({int(100*(slots.get(f'DC{i + 1}', 0)/_datacenters[f'DC{i + 1}'])):3}%)" for i in range(4)))
+        logger.info(f"{t:3}: %s", ", ".join(f"DC{i + 1}: {slots.get(f'DC{i + 1}', 0):6} ({int(100*(slots.get(f'DC{i + 1}', 0)/_datacenters[f'DC{i + 1}'])):3}%)" for i in range(4)))
 
         # make equivalents which make caches redundant (please god keep this up to date…)
         db_scoped_servers = { k : len(v) for k, v in stock.group_by(['datacenter_id', 'server_generation']) }

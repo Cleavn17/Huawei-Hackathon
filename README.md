@@ -12,7 +12,7 @@ Make sure an empty 'output' folder exists.
 
 ```
 mkdir -p output
-<test_seeds xargs -P 10 -I {} python3 mysolution.py --seed {}
+NAIVE_LOG_LEVEL=INFO <test_seeds xargs -P 10 -I {} python3 mysolution.py --seed {}
 <test_seeds xargs -P 10 -I {} python3 evaluation_example.py output/{}.json --silent --seed {}
 ```
 
