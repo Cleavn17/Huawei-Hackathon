@@ -205,7 +205,10 @@ def get_my_solution(demand) -> list:
                         expiry_pool[G] = untaken
                         need -= len(taken)
                         moved = stock.filter(F('server_id').is_in(taken) & (F('datacenter_id') != datacenter_id))
-                        stock = stock.with_columns(datacenter_id=pl.when(F('server_id').is_in(taken)).then(pl.lit(datacenter_id)).otherwise('datacenter_id')) # just rename all that shit
+                        stock = stock.with_columns(
+                            datacenter_id=pl.when(F('server_id').is_in(taken)).then(pl.lit(datacenter_id)).otherwise('datacenter_id'),
+                            latency_sensitivity=pl.lit(I)
+                        ) # just rename all that shit
                         move_actions = []
                         for _server in moved.to_dicts():
                             move_actions.append({
