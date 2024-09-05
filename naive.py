@@ -7,6 +7,27 @@ from polars import col as F
 from functools import lru_cache
 from line_profiler import profile
 
+def projected_fleet_profit(n, cost_of_energy, server, demands, t, break_even_per_server=0.0, initial_balance_per_server=0.0, lookahead=90, steps=1, all=False, ages=None):
+    scenarios = []
+    capacity = n * server["capacity"]
+    if ages is None:
+        ages = np.broadcast_to(np.array([1]), n)
+    for ratio in range(steps):
+        scalar = (steps - ratio) / steps
+        scaled_need = int(n * scalar)
+        profit_earned = initial_balance_per_server * scaled_need
+        for k in range(t, min(t + lookahead, 168)):
+            capacity_served = min(capacity, demands.get(k) or 0)
+            energy_costs = server["energy_consumption"] * cost_of_energy
+            maintenance_costs = get_maintenance_cost(server["average_maintenance_fee"], ages + (k - t), server["life_expectancy"]).sum()
+            revenue = capacity_served * server["selling_price"]
+            profit = revenue - scaled_need * energy_costs - maintenance_costs
+            profit_earned += profit
+        # extrapolate to break-even and then some
+        if profit_earned > scaled_need * break_even_per_server or all:
+            scenarios.append((scalar, profit_earned))
+    return scenarios
+
 def compress(i):
     return base64.b64encode(struct.pack('<i', i).rstrip(b'\x00')).strip(b'=')
 
@@ -86,12 +107,13 @@ def get_my_solution(demand) -> list:
         
         for I in latency_sensitivities:
             for G in server_generations:
-                # Demand with lookahead into the future
                 S = get_server_with_selling_price(I, G)
-                D_ig = IG_dmd[G].filter(F('time_step').is_between(t, t + 10))[I].mean() or 0
-                C_ig = datacenters.filter(F('latency_sensitivity') == I)['slots_capacity'].sum() - IG_existing_sum.get((I, G), 0)
-                A_ig = min(D_ig, C_ig) * S["selling_price"] - S["energy_consumption"] * datacenters.filter(F('latency_sensitivity') == I)['cost_of_energy'].min()
-                demand_profiles.append((I, G, A_ig))
+                E_ig = datacenters.filter(F('latency_sensitivity') == I)['cost_of_energy'].mean()
+                capacity_to_offer = datacenters.filter(F('latency_sensitivity') == I)['slots_capacity'].sum() - IG_existing_sum.get((I, G), 0)
+                n = capacity_to_offer // S['slots_size']
+                demands = { d['time_step'] : d[I] for d in IG_dmd[G]['time_step', I].to_dicts() }
+                [(_, profit)] = projected_fleet_profit(t=t, n=n, cost_of_energy=E_ig, server=S, demands=demands, all=True, lookahead=5)
+                demand_profiles.append((I, G, profit))
 
         demand_profiles = sorted(demand_profiles, key=lambda p: -p[2])
         
@@ -99,11 +121,7 @@ def get_my_solution(demand) -> list:
 
         DBS = { k : v.to_dicts() for [k], v in datacenters.group_by('latency_sensitivity') }
 
-
         expiry_list = []
-
-        expiry_list_set = set(expiry_list)
-        old_expiry_list_set = set(old_expiry_list)
         
         for I, G, _ in demand_profiles:
             for candidate in DBS[I]:
@@ -121,28 +139,32 @@ def get_my_solution(demand) -> list:
                 servers_needed_to_meet_demand_next = D_ig_next // server['capacity']
                 servers_in_stock = DC_SCOPED_SERVERS.get((datacenter_id, G), 0)
                 Z_ig = servers_in_stock * server['capacity']
+                
                 try:
                     utilisation = min(D_ig, Z_ig) / Z_ig
                 except ZeroDivisionError:
                     utilisation = 1.0
                     
                 excess = max(0, servers_in_stock - max(servers_needed_to_meet_demand, servers_needed_to_meet_demand_next))
+                
+                if excess > 0:
+                    demands = { d['time_step'] : d[I] for d in IG_dmd[G]['time_step', I].to_dicts() }
+                    ages = stock.filter((F('server_generation') == G) & (F('datacenter_id') == datacenter_id)).with_columns(k=t - F('time_step'))['k']
+                    W = projected_fleet_profit(t=t, n=servers_in_stock, server=server, demands=demands, cost_of_energy=candidate["cost_of_energy"], all=True, ages=ages, lookahead=10, steps=5)
+                    W = sorted(W, key=lambda p: -p[1])
+                    excess = int((excess + servers_in_stock - servers_in_stock * W[-1][0]) / 2)
 
                 if G not in expiry_pool:
                     expiry_pool[G] = []
                 
-                if excess > 0 and (utilisation < 0.9 or servers_needed_to_meet_demand == 0):
-                # if excess > 1000 or (servers_needed_to_meet_demand == 0 and excess > 0):
-                    # Don't move unprofitable servers…
+                # if excess > 0 and (utilisation < 0.9 or servers_needed_to_meet_demand == 0):
+                if excess > 0:
                     servers_to_merc = existing[(datacenter_id, G)].sort('time_step')[-excess:]
-                    # do book keeping here
                     for server in servers_to_merc.to_dicts():
                         DC_SERVERS[server["datacenter_id"]] -= 1
                         DC_SLOTS[server["datacenter_id"]] -= server["slots_size"]
                         DC_SCOPED_SERVERS[(server["datacenter_id"], server["server_generation"])] -= 1
-
                     print(f"\tExpiring {len(servers_to_merc):5,} of {I}-{G} ({D_ig_old:,} 📉 {D_ig:,})")
-
                     expiry_list.append(f'{I}-{G}')
                     expiry_pool[G] += [*servers_to_merc['server_id']]
 
@@ -184,60 +206,79 @@ def get_my_solution(demand) -> list:
                                 "action" : "move"
                             })
 
-                        print(f"\tHarvisting {len(taken):,} of {I}-{G} from expiry pool for €{len(moved)*server['cost_of_moving']:,} ({len(taken) - len(moved):,} came free) (ẟ{len(taken)*server['capacity']:,} to meet {D_ig:,})")
+                        print(f"\tHarvisting {len(taken):,} of {I}-{G} from expiry pool for €{len(moved)*server['cost_of_moving']:,} (ẟ{len(taken)*server['capacity']:,} to meet {D_ig:,})")
                             
                         DC_SERVERS[datacenter_id] = DC_SERVERS.get(datacenter_id, 0) + len(taken)
                         DC_SLOTS[datacenter_id] = DC_SLOTS.get(datacenter_id, 0) + len(taken) * slots_size
                         DC_SCOPED_SERVERS[(datacenter_id, G)] = DC_SCOPED_SERVERS.get((datacenter_id, G), 0) + len(taken)
 
                         actions += move_actions
-                    
-                    # Do not purchase chips which will never make
-                    # money to increase endgame P and normalised L
-                    # (due to a lack of new chips).
-                    C = server["capacity"]
-                    P = server["purchase_price"]
-                    R = server["selling_price"]
-                    T = min(60, 168 - t)
-                    energy_costs = T * server["energy_consumption"] * candidate["cost_of_energy"]
-                    maintenance_costs = sum(get_maintenance_cost(server["average_maintenance_fee"], i + 1, server["life_expectancy"]) for i in range(T))
-                    purchasing_price = P
-                    maximum_feasible_profit = C * R * T
-                    # The only guaranteed cost is purchasing
-                    # price. Profit might be rewarded if longevity and
-                    # utilisation increase .etc. Just using a random
-                    # coefficient here to dampen their influence
-                    # slightly.
-                    B = maximum_feasible_profit - purchasing_price - (energy_costs - maintenance_costs) * 0.8
-                    chip_is_possibly_profitable = B > 0
 
-                    if t >= server["release_start"] and t <= server["release_end"] and chip_is_possibly_profitable and need > 0:
-                        if f'{I}-{G}' in old_expiry_list:
-                            warning = f"([38;2;255;0;0m🤡 {I}-{G} was expired last round! 🤡[m)"
+                    # NEED TO AUGMENT SIMULATED PROFITABILITY PLANNING
+
+                    if need > 0:
+                        C = server["capacity"]
+                        P = server["purchase_price"]
+                        R = server["selling_price"]
+                        M = server["average_maintenance_fee"]
+                        XHAT = server["life_expectancy"]
+
+                        target_additional_capacity = need * C
+                        
+                        # ASSUMING THAT IG → DC is bijective, need to handle the double high using a real query
+                        existing_capacity = DC_SCOPED_SERVERS.get((datacenter_id, G), 0) * C
+
+                        # Assume that when the demand falls below the existing capacity, no capacity will go to the new servers
+                        demands = { d['time_step'] : max(0, d[I] - existing_capacity)  for d in IG_dmd[G]['time_step', I].to_dicts() }
+                        
+                        profitable_scenarios = projected_fleet_profit(
+                            n=need,
+                            cost_of_energy=candidate["cost_of_energy"],
+                            server=server,
+                            demands=demands,
+                            t=t,
+                            break_even_per_server=P/5,
+                            initial_balance_per_server=-P
+                        )
+                        is_profitable_scenario = len(profitable_scenarios) != 0
+                        profitable_scenarios = sorted(profitable_scenarios, key=lambda m: m[1])
+
+                        if is_profitable_scenario and len(profitable_scenarios):
+                            best_scale, _ = profitable_scenarios[-1]
+                            formatted = [f'{scalar} €{int(profit_earned):,}' for scalar, profit_earned in profitable_scenarios]
+                            print(f"\tBest choice is: '{formatted[-1]}', others: {formatted[:-1]}")
+                            need = int(need * best_scale)
+                            print(f"\tBuy {need} more {I}-{G} servers for €{int(need*P):,}!")
                         else:
-                            warning = ""
-                        print(f"\tPurchasing {need:,} of {I}-{G} for €{int(need * server["purchase_price"]):,} (ẟ{need * server["capacity"]:,} to meet {D_ig:,}) {warning}")
-                        
-                        buy_actions = [
-                            {
-                                "time_step" : t,
-                                "datacenter_id" : datacenter_id,
-                                "server_generation" : G,
-                                "server_id" : compress(i := i + 1).decode(),
-                                "action" : "buy"
-                            }
-                            for _ in range(need)
-                        ]
-                        actions += buy_actions
-                        bought = pl.DataFrame([{**action, "latency_sensitivity" : I, "slots_size" : slots_size } for action in buy_actions], schema=stock_schema)
-                        stock = pl.concat([stock, bought])
+                            print(f"\tDon't drop €{int(need*P):,} on {need} more {I}-{G} servers! ")
 
-                        DC_SERVERS[datacenter_id] = DC_SERVERS.get(datacenter_id, 0) + len(bought)
-                        DC_SLOTS[datacenter_id] = DC_SLOTS.get(datacenter_id, 0) + len(bought) * slots_size
-                        DC_SCOPED_SERVERS[(datacenter_id, G)] = DC_SCOPED_SERVERS.get((datacenter_id, G), 0) + len(bought)
-                        
-                        delta = 5
-                        DC_DEAD_AT[t + server['life_expectancy'] - delta] = DC_DEAD_AT.get(t + server['life_expectancy'] - delta, []) + [server['server_id'] for server in buy_actions]
+                        if t >= server["release_start"] and t <= server["release_end"] and is_profitable_scenario:
+                            if f'{I}-{G}' in old_expiry_list:
+                                warning = f"([38;2;255;0;0m🤡 {I}-{G} was expired last round! 🤡[m)"
+                            else:
+                                warning = ""
+                            print(f"\tPurchasing {need:,} of {I}-{G} for €{int(need * server["purchase_price"]):,} (ẟ{need * server["capacity"]:,} to meet {D_ig:,}) {warning}")
+
+                            buy_actions = [
+                                {
+                                    "time_step" : t,
+                                    "datacenter_id" : datacenter_id,
+                                    "server_generation" : G,
+                                    "server_id" : compress(i := i + 1).decode(),
+                                    "action" : "buy"
+                                }
+                                for _ in range(need)
+                            ]
+                            actions += buy_actions
+                            bought = pl.DataFrame([{**action, "latency_sensitivity" : I, "slots_size" : slots_size } for action in buy_actions], schema=stock_schema)
+                            stock = pl.concat([stock, bought])
+
+                            DC_SERVERS[datacenter_id] = DC_SERVERS.get(datacenter_id, 0) + len(bought)
+                            DC_SLOTS[datacenter_id] = DC_SLOTS.get(datacenter_id, 0) + len(bought) * slots_size
+                            DC_SCOPED_SERVERS[(datacenter_id, G)] = DC_SCOPED_SERVERS.get((datacenter_id, G), 0) + len(bought)
+
+                            delta = 5
+                            DC_DEAD_AT[t + server['life_expectancy'] - delta] = DC_DEAD_AT.get(t + server['life_expectancy'] - delta, []) + [server['server_id'] for server in buy_actions]
 
         excess_ids = []
         for G in server_generations:
