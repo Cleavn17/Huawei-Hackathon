@@ -1,3 +1,7 @@
+# caith do dhochas agus do gui sa bhruascar
+# nil aon usaid acu
+# is ifreann te gan reasun
+# an cod faoi bhun
 from utils import load_problem_data
 import numpy as np
 import base64, struct
