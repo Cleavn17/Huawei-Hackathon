@@ -216,6 +216,7 @@ def get_my_solution(demand) -> list:
                     need = np.clip(servers_needed_to_meet_demand - servers_in_stock, 0, capacity_remaining // slots_size)
                     
                     # ASSUME MOVED SERVERS ACT AS FRESH SERVERS (THIS IS FALSE AND MAINTENANCE COST IS MUCH HIGHER, THERE STILL MAY BE NO BREAK EVEN)
+                    # Really, we should run some code like `projected_fleet_profit` here instead of blindly harvesting servers that we were going to throw away
                     pool = expiry_pool.get(G, [])
                     amount_to_take_from_pool = min(need, len(pool))
                     if amount_to_take_from_pool > 0:
