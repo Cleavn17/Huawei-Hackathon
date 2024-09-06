@@ -64,12 +64,12 @@ for seed in seeds:
         code = f'{N_j} | {T_j} | {seed}'
         print(code)
         
-        solution = bases.get(N_j) or get_my_solution(actual_demand, parameters=N) ; bases[N_j] = solution
+        solution, stocks = bases.get(N_j) or get_my_solution(actual_demand, parameters=N, return_stock_log=True) ; bases[N_j] = solution
         solution_path = f'/tmp/{code}-unmutated.json'
         with open(solution_path, 'w') as f: json.dump(solution, f)
-        score = bases_E[N_j] if N_j in bases_E else evaluation_function(load_solution(solution_path), demand, datacenters, servers, selling_prices, seed=seed, verbose=args.verbose, actual_demand=actual_demand) ; bases_E[N_j] = score
+        (score, log) = bases_E[N_j] if N_j in bases_E else evaluation_function(load_solution(solution_path), demand, datacenters, servers, selling_prices, seed=seed, verbose=args.verbose, actual_demand=actual_demand, return_objective_log=True) ; bases_E[N_j] = (score, log)
         
-        mutated_solution = mods.get((N_j, T_j)) or mutate(actual_demand, solution_path) ; mods[(N_j, T_j)] = mutated_solution
+        mutated_solution = mods.get((N_j, T_j)) or mutate(actual_demand, solution_path, log, stocks) ; mods[(N_j, T_j)] = mutated_solution
         mutated_solution_path = f'/tmp/{code}-mutated.json'
         with open(mutated_solution_path, 'w') as f: json.dump(mutated_solution, f)
         mutated_score = mods_E[(N_j, T_j)] if (N_j, T_j)in mods_E else evaluation_function(load_solution(mutated_solution_path), demand, datacenters, servers, selling_prices, seed=seed, verbose=args.verbose, actual_demand=actual_demand) ; mods_E[(N_j, T_j)] = mutated_score

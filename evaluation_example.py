@@ -19,6 +19,6 @@ solution = load_solution(args.file)
 demand, datacenters, servers, selling_prices = load_problem_data()
 
 # EVALUATE THE SOLUTION
-score = evaluation_function(solution, demand, datacenters, servers, selling_prices, seed=seed, verbose=args.verbose)
+score, _ = evaluation_function(solution, demand, datacenters, servers, selling_prices, seed=seed, verbose=args.verbose, return_objective_log=True)
 
 print(f'Solution score (seed={seed}): {score}')

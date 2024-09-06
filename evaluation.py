@@ -345,7 +345,9 @@ def get_evaluation(solution,
                    servers,
                    selling_prices,
                    time_steps=get_known('time_steps'), 
-                   verbose=1):
+                   verbose=1,
+                   actual_demand=None,
+                   return_objective_log=False):
 
     # SOLUTION EVALUATION
     
@@ -358,8 +360,12 @@ def get_evaluation(solution,
     selling_prices = change_selling_prices_format(selling_prices)
 
     # DEMAND DATA PREPARATION
-    demand = get_actual_demand(demand)
+    if actual_demand is None:
+        demand = get_actual_demand(demand)
+    else:
+        demand = actual_demand
     OBJECTIVE = 0
+    OBJECTIVE_log = []
     FLEET = pd.DataFrame()
     # if ts-related fleet is empty then current fleet is ts-fleet
     for ts in range(1, time_steps+1):
@@ -401,7 +407,7 @@ def get_evaluation(solution,
 
             # PUT ENTIRE FLEET on HOLD ACTION
             FLEET = put_fleet_on_hold(FLEET)
-
+            
             # PREPARE OUTPUT
             output = {'time-step': ts,
                       'O': round(OBJECTIVE.item(), 2),
@@ -411,6 +417,9 @@ def get_evaluation(solution,
                       'P': round(P.item(), 2),
                       'R': round(R.item(), 2),
                       'C': round(C.item(), 2)}
+
+            OBJECTIVE_log.append(output)
+            
         else:
             # PREPARE OUTPUT
             output = {'time-step': ts,
@@ -422,7 +431,10 @@ def get_evaluation(solution,
         if verbose:
             print(output)
             
-    return OBJECTIVE
+    if return_objective_log:
+        return OBJECTIVE, OBJECTIVE_log
+    else:
+        return OBJECTIVE
 
 
 def evaluation_function(solution, 
@@ -432,7 +444,9 @@ def evaluation_function(solution,
                         selling_prices,
                         time_steps=get_known('time_steps'), 
                         seed=None,
-                        verbose=0):
+                        verbose=0,
+                        actual_demand=None,
+                        return_objective_log=False):
 
     """
     Evaluate a solution for the Tech Arena Phase 1 problem.
@@ -476,7 +490,9 @@ def evaluation_function(solution,
                               servers,
                               selling_prices,
                               time_steps=time_steps, 
-                              verbose=verbose)
+                              verbose=verbose,
+                              actual_demand=actual_demand,
+                              return_objective_log=return_objective_log)
     # CATCH EXCEPTIONS
     except Exception as e:
         logger.error(e)
