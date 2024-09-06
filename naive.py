@@ -208,7 +208,11 @@ def get_my_solution(demand) -> list:
                 servers_needed_to_meet_demand = D_ig // server['capacity'] # // len(candidates)
                 slots_used_in_datacenter = DC_SLOTS.get(datacenter_id, 0)
                 assert slots_used_in_datacenter <= slots_capacity, "stock must be <=capacity"
-                servers_in_stock = DC_SCOPED_SERVERS.get((datacenter_id, G), 0)
+
+                # servers_in_stock = DC_SCOPED_SERVERS.get((datacenter_id, G), 0)
+                # Use global perspective to maximise utilisation (minimise underutilisation)
+                servers_in_stock = sum(DC_SCOPED_SERVERS.get((candidate['datacenter_id'], G), 0) for candidate in DBS[I])
+                
                 if servers_in_stock < servers_needed_to_meet_demand:
                     
                     capacity_remaining = slots_capacity - slots_used_in_datacenter
