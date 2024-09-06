@@ -34,7 +34,6 @@ def get_my_solution(
         demand,
         path,
         log,
-        stocks,
         /,
         parameters=Parameters()
         
@@ -180,7 +179,7 @@ def get_my_solution(
     bad_servers_0_set = { b['server_id'] : b for b in bad_servers }
     servers_to_skip = set()
     zumms = []
-    breakpoint()
+    
     for value in actions.to_dicts():
         if value['server_id'] in servers_to_skip:
             continue
@@ -190,7 +189,8 @@ def get_my_solution(
             omega = bad_server['omega']
             peak = bad_server['peak']
             if parameters.method == 'delta':
-                # target_dismissal = value['time_step'] - parameters.dismiss_delta
+                target_dismissal = value['time_step'] - parameters.dismiss_delta
+            elif parameters.method == 'peak':
                 target_dismissal = int(peak + omega) / 2
             else:
                 target_dismissal = int (lp + omega / 2) if lp is not None else value['time_step'] - parameters.dismiss_delta

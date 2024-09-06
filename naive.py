@@ -24,6 +24,7 @@ logger = logging.getLogger("naive")
 logger.setLevel(logging.DEBUG)
 logger.addHandler(handler)
 
+@profile
 def projected_fleet_profit(
         n,
         cost_of_energy,
@@ -38,8 +39,6 @@ def projected_fleet_profit(
         use_correct_capacity_formulation=False
 ):
     scenarios = []
-    if ages is None:
-        ages = np.broadcast_to(1, n)
     capacity = n * server["capacity"]
     for ratio in ratios:
         scaled_need = int(n * ratio)
@@ -50,7 +49,10 @@ def projected_fleet_profit(
         for k in range(t, min(t + lookahead, 168 + 1)):
             capacity_served = min(capacity, demands.get(k) or 0)
             energy_costs = server["energy_consumption"] * cost_of_energy
-            maintenance_costs = get_maintenance_cost(server["average_maintenance_fee"], ages + (k - t), server["life_expectancy"]).sum()
+            if ages is None:
+                maintenance_costs = get_maintenance_cost(server["average_maintenance_fee"], k - t + 1, server["life_expectancy"]) * scaled_need
+            else:
+                maintenance_costs = get_maintenance_cost(server["average_maintenance_fee"], ages + (k - t), server["life_expectancy"]).sum()
             revenue = capacity_served * server["selling_price"]
             profit = revenue - scaled_need * energy_costs - maintenance_costs
             balance += profit
@@ -103,9 +105,6 @@ def get_my_solution(
     
     server_generations = ["GPU.S1", "GPU.S2", "GPU.S3", "CPU.S1", "CPU.S2", "CPU.S3", "CPU.S4"]
     latency_sensitivities = ["low", "high", "medium"]
-    
-    # server_generations = ["CPU.S1"]
-    # latency_sensitivities = ["low"]
 
     stock_schema = {
         'time_step' : pl.Int64,
@@ -170,7 +169,7 @@ def get_my_solution(
             for G in server_generations:
                 S = get_server_with_selling_price(I, G)
                 E_ig = DBS_raw[I]['cost_of_energy'].mean()
-                capacity_to_offer = datacenters.filter(F('latency_sensitivity') == I)['slots_capacity'].sum() - IG_existing_sum.get((I, G), 0)
+                capacity_to_offer = sum(candidate['slots_capacity']for candidate in DBS[I]) - IG_existing_sum.get((I, G), 0)
                 n = capacity_to_offer // S['slots_size']
                 demands = { d['time_step'] : d[I] for d in IG_dmd[G]['time_step', I].to_dicts() }
                 [(_, profit)] = projected_fleet_profit(t=t, n=n, cost_of_energy=E_ig, server=S, demands=demands, all=True, lookahead=5)
@@ -181,6 +180,8 @@ def get_my_solution(
         expiry_pool = {}
         
         expiry_list = []
+
+        ages_DG = { k : v.with_columns(k=t - F('time_step'))['k'] for k, v in existing.items() }
         
         for I, G, _ in demand_profiles:
             # need to make more wholistic …
@@ -196,7 +197,8 @@ def get_my_solution(
 
                 # If the demand saturates our servers, ignore the fact that the future may be bleak and make hay while the sun shines
                 demands = { d['time_step'] : d[I] for d in IG_dmd[G]['time_step', I].to_dicts() }
-                ages = stock.filter((F('server_generation') == G) & (F('datacenter_id') == datacenter_id)).with_columns(k=t - F('time_step'))['k']
+                # ages = stock.filter((F('server_generation') == G) & (F('datacenter_id') == datacenter_id)).with_columns(k=t - F('time_step'))['k']
+                ages = ages_DG[(datacenter_id, G)]
                 D_ig_real = int(IG_dmd[G].filter(F('time_step') == t)[I].mean() or 0)
                 if D_ig_real >= global_servers_in_stock * server["capacity"]:
                     continue
@@ -296,15 +298,17 @@ def get_my_solution(
                         
                         demands = { d['time_step'] : max(0, d[I] - existing_capacity)  for d in IG_dmd[G]['time_step', I].to_dicts() }
                         
-                        other_perspectives = []
                         # When shit is sunshine and rainbows and there is some stock quantity we can purchase which is profitable even if the minimum demand was sustained for a very long time
                         other_perspective = np.clip(((IG_dmd[G].filter(F('time_step').is_between(t, t + parameters.expiry_lookahead * 3))[I].min() or 0) - existing_capacity) / server["capacity"] / need, 0.0, 1.0)
+                        if other_perspective < 1.0:
+                            other_perspectives = [other_perspective]
+                            LM = 10
+                            for i_CANT_USE_I_AS_AN_ITERATOR_BECAUSE_IT_IS_A_GLOBAL_VARIABLE in range(LM):
+                                if i_CANT_USE_I_AS_AN_ITERATOR_BECAUSE_IT_IS_A_GLOBAL_VARIABLE / LM > other_perspective:
+                                    other_perspectives.append(i_CANT_USE_I_AS_AN_ITERATOR_BECAUSE_IT_IS_A_GLOBAL_VARIABLE / LM)
+                        else:
+                            other_perspectives = []
                         
-                        LM = 10
-                        for i_CANT_USE_I_AS_AN_ITERATOR_BECAUSE_IT_IS_A_GLOBAL_VARIABLE in range(LM):
-                            if i_CANT_USE_I_AS_AN_ITERATOR_BECAUSE_IT_IS_A_GLOBAL_VARIABLE / LM > other_perspective:
-                                other_perspectives.append(i_CANT_USE_I_AS_AN_ITERATOR_BECAUSE_IT_IS_A_GLOBAL_VARIABLE / LM)
-
                         profitable_scenarios = projected_fleet_profit(
                             n=need,
                             cost_of_energy=candidate["cost_of_energy"],
