@@ -284,6 +284,17 @@ def get_capacity_by_server_generation_latency_sensitivity(fleet):
     Z = Z.fillna(0, inplace=False)
     return Z
 
+def get_count_by_server_generation_latency_sensitivity(fleet):
+    # CALCULATE THE CAPACITY AT A SPECIFIC TIME-STEP t FOR ALL PAIRS OF
+    # LATENCY SENSITIVITIES AND SERVER GENERATIONS. ADJUST SUCH CAPACITY
+    # ACCORDING TO THE FAILURE RATE f.
+    Z = fleet.groupby(by=['server_generation', 'latency_sensitivity'])['capacity'].count().unstack()
+    cols = get_valid_columns(Z.columns, get_known('latency_sensitivity'))
+    Z = Z[cols]
+    Z = Z.map(adjust_capacity_by_failure_rate, na_action='ignore')
+    Z = Z.fillna(0, inplace=False)
+    return Z
+
 
 def get_valid_columns(cols1, cols2):
     # HELPER FUNCTION TO GET THE COLUMNS THAT ARE IN THE DATAFRAME
@@ -292,13 +303,12 @@ def get_valid_columns(cols1, cols2):
 
 def adjust_capacity_by_failure_rate(x):
     # HELPER FUNCTION TO CALCULATE THE FAILURE RATE f
-    return int(x * (1 - truncweibull_min.rvs(0.3, 0.05, 0.1, size=1).item()))
+    return int(x * (1 - truncweibull_min.rvs(0.30, 0.05, 0.1, size=1).item()))
 
 
 def check_datacenter_slots_size_constraint(fleet):
     # CHECK DATACENTERS SLOTS SIZE CONSTRAINT
-    slots = fleet.groupby(by=['datacenter_id']).agg({'slots_size': 'sum',
-                                                     'slots_capacity': 'mean'})
+    slots = fleet.groupby(by=['datacenter_id']).agg({'slots_size': 'sum', 'slots_capacity': 'mean'})
     test = slots['slots_size'] > slots['slots_capacity']
     constraint = test.any()
     if constraint:
@@ -433,7 +443,8 @@ def get_evaluation(fleet,
                    selling_prices,
                    elasticity,
                    time_steps=get_known('time_steps'), 
-                   verbose=1):
+                   verbose=1,
+                   limit=168):
 
     # SOLUTION EVALUATION
 
@@ -458,6 +469,7 @@ def get_evaluation(fleet,
 
         # GET THE ACTUAL DEMAND AT TIMESTEP ts
         D = get_time_step_demand(demand, ts)
+        OD = D.copy()
 
         # GET THE SERVERS DEPLOYED AT TIMESTEP ts
         ts_fleet = get_time_step_fleet(fleet, ts)
@@ -470,7 +482,7 @@ def get_evaluation(fleet,
 
         # UPDATE THE DEMAND ACCORDING TO PRICES AT TIMESTEP ts
         D = update_demand_according_to_prices(D, selling_prices, base_prices, elasticity)
-
+        
         if ts_fleet.empty and not FLEET.empty:
             ts_fleet = FLEET
         elif ts_fleet.empty and FLEET.empty:
@@ -483,6 +495,17 @@ def get_evaluation(fleet,
         if FLEET.shape[0] > 0:
             # GET THE SERVERS CAPACITY AT TIMESTEP ts
             Zf = get_capacity_by_server_generation_latency_sensitivity(FLEET)
+            Cf = get_count_by_server_generation_latency_sensitivity(FLEET)
+
+            for I in D.columns:
+                for G in D.index:
+                    if I == 'low' and G == 'CPU.S1' or True:
+                        S = selling_prices
+                        B = base_prices
+                        try:
+                            print(f"\t(t={ts} {I}-{G}) demand: {D.loc[G, I]} ({OD.loc[G, I]}), p: {S.loc[G, I]} ({B.loc[G, I]}), capacity: {Zf.loc[G, I]}, count: {Cf.loc[G, I]}")
+                        except:
+                            pass
 
             # CHECK CONSTRAINTS
             check_datacenter_slots_size_constraint(FLEET)
@@ -570,15 +593,7 @@ def evaluation_function(fleet,
     np.random.seed(seed)
     # EVALUATE SOLUTION
     try:
-        return get_evaluation(fleet, 
-                                pricing_strategy, 
-                                demand,
-                                datacenters,
-                                servers,
-                                selling_prices,
-                                elasticity,
-                                time_steps=time_steps, 
-                                verbose=verbose)
+        return get_evaluation(fleet, pricing_strategy, demand, datacenters, servers, selling_prices, elasticity, time_steps=time_steps, verbose=verbose)
     # CATCH EXCEPTIONS
     except Exception as e:
         logger.error(e)

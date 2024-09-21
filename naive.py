@@ -97,10 +97,11 @@ Parameters.MATRIX = {
 @profile
 def get_my_solution(
         demand,
-        assertions_enabled = False,
+        assertions_enabled = True,
         log_info = False,
         parameters = Parameters(),
-        return_stock_log = False
+        return_stock_log = False,
+        limit=168
 ) -> list:
     demand = pl.DataFrame(demand)
     _, datacenters, servers, selling_prices, elasticity = [pl.DataFrame(df) for df in load_problem_data()]
@@ -183,7 +184,7 @@ def get_my_solution(
 
     old_expiry_list = []
     
-    for t in range(168):
+    for t in range(limit):
         t = t + 1
 
         # When we purchase servers, we add a mark at the current
@@ -405,12 +406,15 @@ def get_my_solution(
 
                                         target_price = server["selling_price"] * (demand_delta / relevant_elasticity + 1)
                                         new_strategy = create_pricing_strategy(I, G, target_price, t)
-                                        hashtag_missing_aaron_variable_to_indicate_if_we_are_changing_the_price = True
-                                        print (f"({I}-{G}) MET: {demand_met}, BASE: {base_demand}, ΔDᵢg: {demand_delta}, →$: {target_price}, og: {server['selling_price']}")
+                                        # new_strategy = get_default_pricing_strategy_for_demand_segment(I, G, t=t)
+                                        print (f"(t={t} {I}-{G}) MET: {demand_met}, BASE: {base_demand}, ΔDᵢg: {demand_delta}, →$: {target_price}, og: {server['selling_price']}")
                                         
                                         if not hashtag_missing_aaron_variable_to_indicate_if_we_are_changing_the_price:
                                             # PRICING STRATEGY CHANGE
                                             pricing_strategy.append(new_strategy)
+                                            
+                                            
+                                        hashtag_missing_aaron_variable_to_indicate_if_we_are_changing_the_price = True
 
                                         # we're rarely ever in a situation where there's more demand than capacity as we always adjust capacity to meet demand.
                             
@@ -430,7 +434,8 @@ def get_my_solution(
                                     "time_step" : t,
                                     "datacenter_id" : datacenter_id,
                                     "server_generation" : G,
-                                    "server_id" : compress(current_server_index := current_server_index + 1).decode(),
+                                    # "server_id" : compress(current_server_index := current_server_index + 1).decode(),
+                                    "server_id" : str(current_server_index := current_server_index + 1),
                                     "action" : "buy"
                                 }
                                 for _ in range(need)
@@ -552,6 +557,7 @@ def get_my_solution(
             db_scoped_servers = { k : len(v) for k, v in stock.group_by(['datacenter_id', 'server_generation']) }
             db_servers = { k : len(v) for [k], v in stock.group_by('datacenter_id') }
             db_slots = { k : v['slots_size'].sum() for [k], v in stock.group_by('datacenter_id') }
+
             for id in _datacenters.keys():
                 assert stock.filter((F('datacenter_id') == id))['slots_size'].sum() <= datacenters.filter(F('datacenter_id') == id)['slots_capacity'].item(), "Constraint 2 violated"
                 db = db_servers.get(id, 0)
@@ -560,6 +566,9 @@ def get_my_solution(
                 assert DC_SLOTS.get(id, 0) == db_slots.get(id, 0), f"Database and DC_SLOTS are out of sync for {id}"
                 for G in server_generations:
                     assert DC_SCOPED_SERVERS.get((id, G), 0) == db_scoped_servers.get((id, G), 0), f"Database and DC_SCOPED_SERVERS are out of sync for {id}"
+            
+            for (I, G), chips in stock.group_by(['latency_sensitivity', 'server_generation']):
+                print(f"(t={t} {I}-{G}) db check. count: {len(chips)}, capacity: {len(chips) * get_server_with_selling_price(I, G)['capacity']}")
 
         old_expiry_list = expiry_list
         

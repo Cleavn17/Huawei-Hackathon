@@ -12,7 +12,12 @@ parser = ArgumentParser()
 parser.add_argument('--seed', required=False, type=int)
 parser.add_argument('--mutate', required=False)
 parser.add_argument('--eval', const=True, dest="eval", action="store_const", default=False)
+parser.add_argument('--verbose', const=True, dest="verbose", action="store_const", default=False)
+parser.add_argument('--limit', type=int, dest="limit", default=168)
 args = parser.parse_args()
+
+limit = args.limit
+
 seeds = [args.seed] if args.seed is not None else known_seeds()
 
 demand, datacenters, servers, selling_prices, elasticity = load_problem_data()
@@ -25,11 +30,11 @@ for seed in seeds:
     actual_demand = get_actual_demand(demand)
 
     # CALL YOUR APPROACH HERE
-    fleet, pricing_strategy = get_my_solution(actual_demand)
+    fleet, pricing_strategy = get_my_solution(actual_demand, limit=limit)
     fleet, pricing_strategy = pd.DataFrame(fleet), pd.DataFrame(pricing_strategy)
 
     if args.eval:
-        score = evaluation_function(fleet, pricing_strategy, demand, datacenters, servers, selling_prices, elasticity, seed=seed)    
+        score = evaluation_function(fleet, pricing_strategy, demand, datacenters, servers, selling_prices, elasticity, seed=seed, time_steps=limit)    
         print(f"Got: {score}")
     
     # SAVE YOUR SOLUTION
