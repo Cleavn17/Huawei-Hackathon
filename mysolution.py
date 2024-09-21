@@ -35,7 +35,7 @@ for seed in seeds:
 
     if args.eval:
         score = evaluation_function(fleet, pricing_strategy, demand, datacenters, servers, selling_prices, elasticity, seed=seed, time_steps=limit)    
-        print(f"Got: {score}")
+        print(f"Got: {int(score):,}")
     
     # SAVE YOUR SOLUTION
     save_solution(fleet, pricing_strategy, f'./output/{seed}.json')

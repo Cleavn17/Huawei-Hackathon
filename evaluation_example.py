@@ -22,7 +22,7 @@ demand, datacenters, servers, selling_prices, elasticity = load_problem_data()
 # EVALUATE THE SOLUTION
 score = evaluation_function(fleet, pricing_strategy, demand, datacenters, servers, selling_prices, elasticity, seed=seed, verbose=args.verbose)
 
-print(f'Solution score: {score}')
+print(f'Solution score: {int(score):,}')
 
 
 

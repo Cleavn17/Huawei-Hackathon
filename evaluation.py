@@ -503,7 +503,7 @@ def get_evaluation(fleet,
                         S = selling_prices
                         B = base_prices
                         try:
-                            print(f"\t(t={ts} {I}-{G}) demand: {D.loc[G, I]} ({OD.loc[G, I]}), p: {S.loc[G, I]} ({B.loc[G, I]}), capacity: {Zf.loc[G, I]}, count: {Cf.loc[G, I]}")
+                            logger.debug(f"\t(t={ts} {I}-{G}) demand: {D.loc[G, I]} ({OD.loc[G, I]}), p: {S.loc[G, I]} ({B.loc[G, I]}), capacity: {Zf.loc[G, I]}, count: {Cf.loc[G, I]}")
                         except:
                             pass
 

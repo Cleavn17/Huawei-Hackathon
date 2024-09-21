@@ -71,13 +71,9 @@ def projected_fleet_profit(
             scenarios.append((ratio, balance))
     return scenarios
 
-def compress(i):
-    return base64.b64encode(struct.pack('<i', i).rstrip(b'\x00')).strip(b'=')
-
 def get_maintenance_cost(b, x, xhat):
     # Copied from evaluation.py
     return b * (1 + (((1.5)*(x))/xhat * np.log2(((1.5)*(x))/xhat)))
-
 
 from dataclasses import dataclass
 
@@ -160,7 +156,7 @@ def get_my_solution(
     DC_SERVERS = {}
     DC_SLOTS = {}
     DC_SCOPED_SERVERS = {}
-    DC_DEAD_AT = {}
+    dc_servers_to_delete_at = {}
 
     @profile
     def expire_ids(ids, do_book_keeping=True):
@@ -197,7 +193,7 @@ def get_my_solution(
         # have to consider servers that are dismissed anyway because
         # we need to make sure that our stock is accurate.
         
-        dead_ids = DC_DEAD_AT.get(t, [])
+        dead_ids = dc_servers_to_delete_at.get(t, [])
         if len(dead_ids) > 0:
             stock = expire_ids(dead_ids)
     
@@ -284,7 +280,8 @@ def get_my_solution(
                     expiry_pool[G] += [*servers_to_merc['server_id']]
 
         for I, G, _ in demand_profiles:
-            hashtag_missing_aaron_variable_to_indicate_if_we_are_changing_the_price = False
+            global_servers_in_stock = sum(DC_SCOPED_SERVERS.get((candidate['datacenter_id'], G), 0) for candidate in DBS[I])
+            price_changed = False
             for candidate in DBS[I]:
                 datacenter_id = candidate['datacenter_id']
                 
@@ -311,7 +308,6 @@ def get_my_solution(
                     
                     pool = expiry_pool.get(G, [])
                     amount_to_take_from_pool = min(need, len(pool))
-
                     existing_capacity = sum(DC_SCOPED_SERVERS.get((candidate['datacenter_id'], G), 0) * server["capacity"] for candidate in DBS[I])
                     # Assume that when the demand falls below the existing capacity, no capacity will go to the new servers
                     demands = { d['time_step'] : max(0, d[I] - existing_capacity)  for d in IG_dmd[G]['time_step', I].to_dicts() }
@@ -343,9 +339,7 @@ def get_my_solution(
                         DC_SCOPED_SERVERS[(datacenter_id, G)] = DC_SCOPED_SERVERS.get((datacenter_id, G), 0) + len(taken)
 
                         actions += move_actions
-
-                    # NEED TO AUGMENT SIMULATED PROFITABILITY PLANNING
-
+                        
                     if need > 0:
                         P = server["purchase_price"]
                         
@@ -392,9 +386,13 @@ def get_my_solution(
                             if global_servers_in_stock > 0:
                                 # There is no point bumping up the price if we have no servers to sell services to customers
                                 if base_demand != 0:
+                                    
                                     # if base demand is zero (nobody wants these servers anymore), then no amount of selling price
                                     # manipulation will increase profits
                                     demand_met = global_servers_in_stock * server["capacity"]
+
+                                    # breakpoint()
+                                    
                                     if demand_met > base_demand:
                                         # In this case we really need to just sell or hold servers until demand goes up again
                                         pass
@@ -403,26 +401,16 @@ def get_my_solution(
                                         demand_delta = demand_met / base_demand - 1
                                         # ratio = demand_met / base_demand - 1
                                         relevant_elasticity = elasticity_IG[I, G]['elasticity'][0]
-
                                         target_price = server["selling_price"] * (demand_delta / relevant_elasticity + 1)
                                         new_strategy = create_pricing_strategy(I, G, target_price, t)
                                         # new_strategy = get_default_pricing_strategy_for_demand_segment(I, G, t=t)
-                                        print (f"(t={t} {I}-{G}) MET: {demand_met}, BASE: {base_demand}, ΔDᵢg: {demand_delta}, →$: {target_price}, og: {server['selling_price']}")
+                                        logger.debug(f"(t={t} {I}-{G}) MET: {demand_met}, BASE: {base_demand}, ΔDᵢg: {demand_delta}, →$: {target_price}, og: {server['selling_price']}")
                                         
-                                        if not hashtag_missing_aaron_variable_to_indicate_if_we_are_changing_the_price:
+                                        if not price_changed:
                                             # PRICING STRATEGY CHANGE
                                             pricing_strategy.append(new_strategy)
                                             
-                                            
-                                        hashtag_missing_aaron_variable_to_indicate_if_we_are_changing_the_price = True
-
-                                        # we're rarely ever in a situation where there's more demand than capacity as we always adjust capacity to meet demand.
-                            
-
-                            # demand_as_it_stands = …
-                            # demand_we_need_to_reach = …
-                            # percentage_drop = …
-                            # percentage_to_apply_to_base_selling_price = …
+                                        price_changed = True
 
                             
                         if t >= server["release_start"] and t <= server["release_end"] and is_profitable_scenario:
@@ -434,7 +422,6 @@ def get_my_solution(
                                     "time_step" : t,
                                     "datacenter_id" : datacenter_id,
                                     "server_generation" : G,
-                                    # "server_id" : compress(current_server_index := current_server_index + 1).decode(),
                                     "server_id" : str(current_server_index := current_server_index + 1),
                                     "action" : "buy"
                                 }
@@ -449,9 +436,9 @@ def get_my_solution(
                             DC_SCOPED_SERVERS[(datacenter_id, G)] = DC_SCOPED_SERVERS.get((datacenter_id, G), 0) + len(bought)
 
                             delta = parameters.reap_delta
-                            DC_DEAD_AT[t + server['life_expectancy'] - delta] = DC_DEAD_AT.get(t + server['life_expectancy'] - delta, []) + [server['server_id'] for server in buy_actions]
+                            dc_servers_to_delete_at[t + server['life_expectancy'] - delta] = dc_servers_to_delete_at.get(t + server['life_expectancy'] - delta, []) + [server['server_id'] for server in buy_actions]
                             
-            if not hashtag_missing_aaron_variable_to_indicate_if_we_are_changing_the_price:
+            if not price_changed:
                 # PRICING STRATEGY CHANGE
                 pricing_strategy.append(get_default_pricing_strategy_for_demand_segment(I, G, t=t))
 
@@ -568,7 +555,7 @@ def get_my_solution(
                     assert DC_SCOPED_SERVERS.get((id, G), 0) == db_scoped_servers.get((id, G), 0), f"Database and DC_SCOPED_SERVERS are out of sync for {id}"
             
             for (I, G), chips in stock.group_by(['latency_sensitivity', 'server_generation']):
-                print(f"(t={t} {I}-{G}) db check. count: {len(chips)}, capacity: {len(chips) * get_server_with_selling_price(I, G)['capacity']}")
+                logger.debug(f"(t={t} {I}-{G}) db check. count: {len(chips)}, capacity: {len(chips) * get_server_with_selling_price(I, G)['capacity']}")
 
         old_expiry_list = expiry_list
         
