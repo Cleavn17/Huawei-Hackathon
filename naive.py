@@ -37,7 +37,6 @@ logger.addHandler(handler)
 def projected_fleet_profit(
         # The number of servers to consider the profit for
         n,
-        
         cost_of_energy,
         server, demands,
         t,
@@ -106,26 +105,41 @@ def get_my_solution(
     demand = pl.DataFrame(demand)
     _, datacenters, servers, selling_prices, elasticity = [pl.DataFrame(df) for df in load_problem_data()]
 
-    @lru_cache
+    elasticity_IG = { ig: e for ig, e in elasticity.group_by(['latency_sensitivity', 'server_generation']) }
+    
+    # "BROKEN" BY DYNAMIC SELLING PRICES
     def get_server_with_selling_price(i, g) -> dict:
         server = servers.join(selling_prices.filter(F('latency_sensitivity') == i), on=['server_generation']).filter(F('server_generation') == g).to_dicts()[0]
         server["release_start"], server["release_end"] = json.loads(server.pop("release_time"))
         return server
     
-    i = 1
+    current_server_index = 1
     actions = []
-    
-    server_generations = ["GPU.S1", "GPU.S2", "GPU.S3", "CPU.S1", "CPU.S2", "CPU.S3", "CPU.S4"]
-    latency_sensitivities = ["low", "high", "medium"]
-    pricing_strategy = [
-        {
-            "time_step" : 1,
+
+    if True:
+        server_generations = ["GPU.S1", "GPU.S2", "GPU.S3", "CPU.S1", "CPU.S2", "CPU.S3", "CPU.S4"]
+        latency_sensitivities = ["low", "high", "medium"]
+    else:
+        server_generations = ["CPU.S1"]
+        latency_sensitivities = ["low"]
+
+    def create_pricing_strategy(i: str, g: str, p: float, t: int):
+        return {
+            "time_step" : t,
             "latency_sensitivity" : i,
             "server_generation" : g,
-            "price": get_server_with_selling_price(i, g)["selling_price"]
+            "price": p
         }
+
+    def get_default_pricing_strategy_for_demand_segment(i, g, /, t):
+        return create_pricing_strategy(i, g, get_server_with_selling_price(i, g)["selling_price"], t)
+    
+    default_pricing_strategy = [
+        get_default_pricing_strategy_for_demand_segment(i, g, t=1)
         for i, g in itertools.product(latency_sensitivities, server_generations)
     ]
+
+    pricing_strategy = [*default_pricing_strategy]
 
     stock_schema = {
         'time_step' : pl.Int64,
@@ -150,7 +164,6 @@ def get_my_solution(
     @profile
     def expire_ids(ids, do_book_keeping=True):
         dropped = { k : v for [k], v in stock.group_by(F('server_id').is_in(ids)) }
-        
         if True in dropped:
             for server in dropped[True].to_dicts():
                 actions.append({
@@ -173,6 +186,16 @@ def get_my_solution(
     for t in range(168):
         t = t + 1
 
+        # When we purchase servers, we add a mark at the current
+        # timestap plus the life expectancy of the server to indicate
+        # that the server should be dismissed at that
+        # point. Technically the evaluation software will dismiss
+        # these servers automatically but manually dismissing servers
+        # has some benifits. If we dismiss servers that we don't have,
+        # the evaluation script will notify us of our mistake. We also
+        # have to consider servers that are dismissed anyway because
+        # we need to make sure that our stock is accurate.
+        
         dead_ids = DC_DEAD_AT.get(t, [])
         if len(dead_ids) > 0:
             stock = expire_ids(dead_ids)
@@ -180,10 +203,13 @@ def get_my_solution(
         existing = { k : v for k, v in stock.group_by(['datacenter_id', 'server_generation']) }
         demand_profiles = []
 
-        # Increases profits by about 10 million
         DBS_raw = { I : v for [I], v in datacenters.group_by('latency_sensitivity') }
         DBS = { I : v.to_dicts() for [I], v in datacenters.group_by('latency_sensitivity') }
         IG_existing_sum = { k : v['slots_size'].sum() for k, v in stock.group_by(['latency_sensitivity', 'server_generation']) }
+
+        # basically used as a way of taking an I-G pair and finding
+        # the demand over a certain amount of timesteps. E.g. doing
+        # averages and what not.
         IG_dmd = { G : v for [G], v in demand.group_by('server_generation') }
         
         for I in latency_sensitivities:
@@ -223,16 +249,18 @@ def get_my_solution(
                 demands = { d['time_step'] : d[I] for d in IG_dmd[G]['time_step', I].to_dicts() }
                 ages = ages_DG[(datacenter_id, G)]
 
-                # If the present is bleak, see if the future holds misfortune and use that insight to determine how many servers to cull
                 D_ig_old       = int(IG_dmd[G].filter(F('time_step').is_between(t - 1, t - 1 + parameters.expiry_lookahead))[I].mean() or 0)
                 D_ig           = int(IG_dmd[G].filter(F('time_step').is_between(t,     t     + parameters.expiry_lookahead))[I].mean() or 0)
                 D_ig_next      = int(IG_dmd[G].filter(F('time_step').is_between(t + 1, t + 1 + parameters.expiry_lookahead))[I].max() or 0)
                 D_ig_next_next = int(IG_dmd[G].filter(F('time_step').is_between(t + 2, t + 2 + parameters.expiry_lookahead))[I].max() or 0)
+                
                 servers_needed_to_meet_demand = D_ig // server['capacity']
                 servers_needed_to_meet_demand_next = D_ig_next // server['capacity']
                 servers_needed_to_meet_demand_next_next = D_ig_next_next // server['capacity']
+                
                 # We do this to prevent selling a chip in one time step only to need it again in the next timestep due to the random noise added to
                 # the demand in the evaluation script. Though it's impact seems to be negligible
+                
                 excess = max(0, servers_in_stock - max(servers_needed_to_meet_demand, servers_needed_to_meet_demand_next, servers_needed_to_meet_demand_next_next))
 
                 if G not in expiry_pool:
@@ -255,6 +283,7 @@ def get_my_solution(
                     expiry_pool[G] += [*servers_to_merc['server_id']]
 
         for I, G, _ in demand_profiles:
+            hashtag_missing_aaron_variable_to_indicate_if_we_are_changing_the_price = False
             for candidate in DBS[I]:
                 datacenter_id = candidate['datacenter_id']
                 
@@ -278,6 +307,7 @@ def get_my_solution(
                     
                     # ASSUME MOVED SERVERS ACT AS FRESH SERVERS (THIS IS FALSE AND MAINTENANCE COST IS MUCH HIGHER, THERE STILL MAY BE NO BREAK EVEN)
                     # Really, we should run some code like `projected_fleet_profit` here instead of blindly harvesting servers that we were going to throw away
+                    
                     pool = expiry_pool.get(G, [])
                     amount_to_take_from_pool = min(need, len(pool))
 
@@ -288,31 +318,13 @@ def get_my_solution(
                     if amount_to_take_from_pool > 0:
                         taken = pool[-amount_to_take_from_pool:]
                         untaken = pool[:-amount_to_take_from_pool]
-                        
                         expiry_pool[G] = untaken
                         need -= len(taken)
                         moved = stock.filter(F('server_id').is_in(taken) & (F('datacenter_id') != datacenter_id))
-
-                        # sneed = [projected_fleet_profit(
-                        #     t=t,
-                        #     n=len(moved),
-                        #     server=server,
-                        #     demands=demands,
-                        #     cost_of_energy=candidate["cost_of_energy"],
-                        #     all=True,
-                        #     ages=t - moved['time_step'] + 1,
-                        #     lookahead=10,
-                        #     ratios=[r],
-                        #     initial_balance_per_server=-(r * 1000 + (1- r) * server["purchase_price"])
-                        # )[0] for r in [1.0, 0.8, 0.6, 0.4, 0.2, 0.0]]
-                        # 
-                        # breakpoint()
-                        
                         stock = stock.with_columns(
                             datacenter_id=pl.when(F('server_id').is_in(taken)).then(pl.lit(datacenter_id)).otherwise('datacenter_id'),
                             latency_sensitivity=pl.when(F('server_id').is_in(taken)).then(pl.lit(I)).otherwise('latency_sensitivity')
                         )
-                        
                         move_actions = []
                         for _server in moved.to_dicts():
                             move_actions.append({
@@ -337,13 +349,14 @@ def get_my_solution(
                         P = server["purchase_price"]
                         
                         # When shit is sunshine and rainbows and there is some stock quantity we can purchase which is profitable even if the minimum demand was sustained for a very long time
+                        
                         other_perspective = np.clip(((IG_dmd[G].filter(F('time_step').is_between(t, t + parameters.expiry_lookahead * 3))[I].min() or 0) - existing_capacity) / server["capacity"] / need, 0.0, 1.0)
                         if other_perspective < 1.0:
                             other_perspectives = [other_perspective]
-                            LM = 10
-                            for i_CANT_USE_I_AS_AN_ITERATOR_BECAUSE_IT_IS_A_GLOBAL_VARIABLE in range(LM):
-                                if i_CANT_USE_I_AS_AN_ITERATOR_BECAUSE_IT_IS_A_GLOBAL_VARIABLE / LM > other_perspective:
-                                    other_perspectives.append(i_CANT_USE_I_AS_AN_ITERATOR_BECAUSE_IT_IS_A_GLOBAL_VARIABLE / LM)
+                            steps_to_consider = 10
+                            for i in range(steps_to_consider):
+                                if i / steps_to_consider > other_perspective:
+                                    other_perspectives.append(i / steps_to_consider)
                         else:
                             other_perspectives = []
                         
@@ -368,14 +381,48 @@ def get_my_solution(
                             logger.debug(f"\tBest choice is: '{formatted[-1]}', others: {formatted[:-1]}")
                             need = int(need * best_scale)
                             logger.debug(f"\tBuy {need} more {I}-{G} servers for €{int(need*P):,}!")
-                        else:
-                            logger.debug(f"\tDon't drop €{int(need*P):,} on {need} more {I}-{G} servers! ")
 
+                            # pricing_strategy.append(get_default_pricing_strategy_for_demand_segment(I, G, t=t))
+                        else:
+                            base_demand = D_ig
+                            
+                            logger.debug(f"\tDon't drop €{int(need*P):,} on {need} more {I}-{G} servers!")
+                            
+                            if global_servers_in_stock > 0:
+                                # There is no point bumping up the price if we have no servers to sell services to customers
+                                if base_demand != 0:
+                                    # if base demand is zero (nobody wants these servers anymore), then no amount of selling price
+                                    # manipulation will increase profits
+                                    demand_met = global_servers_in_stock * server["capacity"]
+                                    if demand_met > base_demand:
+                                        # In this case we really need to just sell or hold servers until demand goes up again
+                                        pass
+                                    elif demand_met <= base_demand:
+                                        # In this case we can decrease the current demand by increasing the selling prices
+                                        demand_delta = demand_met / base_demand - 1
+                                        # ratio = demand_met / base_demand - 1
+                                        relevant_elasticity = elasticity_IG[I, G]['elasticity'][0]
+
+                                        target_price = server["selling_price"] * (demand_delta / relevant_elasticity + 1)
+                                        new_strategy = create_pricing_strategy(I, G, target_price, t)
+                                        hashtag_missing_aaron_variable_to_indicate_if_we_are_changing_the_price = True
+                                        print (f"({I}-{G}) MET: {demand_met}, BASE: {base_demand}, ΔDᵢg: {demand_delta}, →$: {target_price}, og: {server['selling_price']}")
+                                        
+                                        if not hashtag_missing_aaron_variable_to_indicate_if_we_are_changing_the_price:
+                                            # PRICING STRATEGY CHANGE
+                                            pricing_strategy.append(new_strategy)
+
+                                        # we're rarely ever in a situation where there's more demand than capacity as we always adjust capacity to meet demand.
+                            
+
+                            # demand_as_it_stands = …
+                            # demand_we_need_to_reach = …
+                            # percentage_drop = …
+                            # percentage_to_apply_to_base_selling_price = …
+
+                            
                         if t >= server["release_start"] and t <= server["release_end"] and is_profitable_scenario:
-                            if f'{I}-{G}' in old_expiry_list:
-                                warning = f"([38;2;255;0;0m🤡 {I}-{G} was expired last round! 🤡[m)"
-                            else:
-                                warning = ""
+                            warning = f"([38;2;255;0;0m🤡 {I}-{G} was expired last round! 🤡[m)" if f'{I}-{G}' in old_expiry_list else ""
                             logger.debug(f"\tPurchasing {need:,} of {I}-{G} for €{int(need * server["purchase_price"]):,} (ẟ{need * server["capacity"]:,} to meet {D_ig:,} / {(need+servers_in_stock)*server["capacity"]:,}) {warning}")
 
                             buy_actions = [
@@ -383,7 +430,7 @@ def get_my_solution(
                                     "time_step" : t,
                                     "datacenter_id" : datacenter_id,
                                     "server_generation" : G,
-                                    "server_id" : compress(i := i + 1).decode(),
+                                    "server_id" : compress(current_server_index := current_server_index + 1).decode(),
                                     "action" : "buy"
                                 }
                                 for _ in range(need)
@@ -398,6 +445,10 @@ def get_my_solution(
 
                             delta = parameters.reap_delta
                             DC_DEAD_AT[t + server['life_expectancy'] - delta] = DC_DEAD_AT.get(t + server['life_expectancy'] - delta, []) + [server['server_id'] for server in buy_actions]
+                            
+            if not hashtag_missing_aaron_variable_to_indicate_if_we_are_changing_the_price:
+                # PRICING STRATEGY CHANGE
+                pricing_strategy.append(get_default_pricing_strategy_for_demand_segment(I, G, t=t))
 
         excess_ids = []
         for G in server_generations:
@@ -420,72 +471,74 @@ def get_my_solution(
                 .select("latency_sensitivity", 'server_generation', pl.min_horizontal('capacity', 'demand') * F('selling_price'))['capacity'].sum() or 0
             C = stock.join(servers, on="server_generation").filter(F('time_step') == t)['purchase_price'].sum() or 0
             P = (R - C - E) or 0
-            L = stock.join(servers, on="server_generation").select((t - F('time_step') + 1) / F('life_expectancy')).mean().item() or 0.0
             U = stock.join(servers, on="server_generation") \
                 .select("latency_sensitivity", 'server_generation', 'capacity') \
                 .group_by(["latency_sensitivity", "server_generation"]) \
                 .agg(F('capacity').sum()) \
                 .join(K, on=["server_generation", "latency_sensitivity"]) \
                 .select("latency_sensitivity", 'server_generation', pl.min_horizontal('capacity', 'demand') / F('capacity'))['capacity'].mean() or 0.0
-            O = P * L * U
-            logger.debug(f"{t:3}: O: {int(O):<11,}, P: {int(P):<11,} (R={int(R):<11,}, C={int(C):11,},  E={int(E):11,}), L: {L:3.02}, U: {U:3.02}")
+            O = P * U
+            logger.debug(f"{t:3}: O: {int(O):<11,}, P: {int(P):<11,} (R={int(R):<11,}, C={int(C):11,},  E={int(E):11,}), U: {U:3.02}")
 
-            # US = stock.join(servers, on="server_generation") \
-            #     .join(selling_prices, on=["latency_sensitivity", "server_generation"]) \
-            #     .join(datacenters, on=['datacenter_id', 'latency_sensitivity'], how='inner') \
-            #     .group_by(['latency_sensitivity', 'server_generation'])
+        if True:
+            # bad code above
+            #
+            # good code below
+
+            augmented_stock = stock.join(servers, on="server_generation") \
+                .join(selling_prices, on=["latency_sensitivity", "server_generation"]) \
+                .join(datacenters, on=['datacenter_id', 'latency_sensitivity'], how='inner') \
+                .group_by(['latency_sensitivity', 'server_generation'])
             
-            # Um = []
+            ig_utilisations = []
 
-            # brum = {
-            #     (I, G) : S \
-            #     .join(
-            #         balance_sheets[-1].select(F('*').exclude('time_step')) if len (balance_sheets) != 0 else pl.DataFrame([], schema={'server_id':pl.String, 'balance':pl.Float64}),
-            #         on='server_id',
-            #         how='left'
-            #     ) \
-            #     .with_columns(F('balance').fill_null(0.0)) \
-            #     .with_row_index()
-            #     for [I, G], S in US
-            # }
+            augmented_stock_with_balance = {
+                (I, G) : S \
+                .join(
+                    balance_sheets[-1].select(F('*').exclude('time_step')) if len (balance_sheets) != 0 else pl.DataFrame([], schema={'server_id':pl.String, 'balance':pl.Float64}),
+                    on='server_id',
+                    how='left'
+                ) \
+                .with_columns(F('balance').fill_null(0.0)) \
+                .with_row_index()
+                for [I, G], S in augmented_stock
+            }
             
-            # for (I, G), S in US:
-            #     met = len(S) * S['capacity'][0]
-            #     d = IG_dmd[G].filter(F('time_step') == t)[I]
-            #     d = d.item() if len(d) == 1 else 0.0
-            #     Ud = min(met, d) / met
-            #     Um.append(Ud)
+            for (I, G), S in augmented_stock:
+                demand_met = len(S) * S['capacity'][0]
+                d = IG_dmd[G].filter(F('time_step') == t)[I]
+                d = d.item() if len(d) == 1 else 0.0
+                Ud = min(demand_met, d) / demand_met
+                ig_utilisations.append(Ud)
 
-            #     augment to join with demand
-            #     max_rewarded_services = d // S['capacity'][0]
+                # augment to join with demand
+                max_rewarded_services = d // S['capacity'][0]
                 
-            #     brum[(I, G)] = brum[(I, G)].with_columns(
-            #         profit = + L * U * (pl.when(F('index') < max_rewarded_services) \
-            #             .then(F('selling_price') * F('capacity')) \
-            #             .otherwise(0.0)),
-            #         balance = F('balance')
-            #         + L * U * (pl.when(F('index') < max_rewarded_services) \
-            #             .then(F('selling_price') * F('capacity')) \
-            #             .otherwise(0.0)
-            #         - pl.when(F('time_step') == 1).then(F('purchase_price')).otherwise(0)
-            #         - F('energy_consumption') * F('cost_of_energy')
-            #         - pl.struct(['average_maintenance_fee', 'time_step']).map_batches(
-            #             lambda combined: get_maintenance_cost(
-            #                 combined.struct.field('average_maintenance_fee'),
-            #                 t - combined.struct.field('time_step') + 1,
-            #                 96
-            #             )
-            #         ))
-            #     )
+                augmented_stock_with_balance[(I, G)] = augmented_stock_with_balance[(I, G)].with_columns(
+                    profit = (pl.when(F('index') < max_rewarded_services) \
+                        .then(F('selling_price') * F('capacity')) \
+                        .otherwise(0.0)),
+                    balance = F('balance')
+                    + (pl.when(F('index') < max_rewarded_services) \
+                        .then(F('selling_price') * F('capacity')) \
+                        .otherwise(0.0)
+                    - pl.when(F('time_step') == 1).then(F('purchase_price')).otherwise(0)
+                    - F('energy_consumption') * F('cost_of_energy')
+                    - pl.struct(['average_maintenance_fee', 'time_step']).map_batches(
+                        lambda combined: get_maintenance_cost(
+                            combined.struct.field('average_maintenance_fee'),
+                            t - combined.struct.field('time_step') + 1,
+                            96
+                        )
+                    ))
+                )
 
-            # if len(Um) > 0:
-            #     kz = sum(Um) / len(Um)
-            # else:
-            #     kz = 1.0
+            utilisation = kz = sum(ig_utilisations) / len(ig_utilisations) if len(ig_utilisations) > 0 else 1.0
 
-            
-            # balance_sheet = pl.concat(brum.values()).select('server_id', 'balance', 'profit').with_columns(time_step= t)
-            # balance_sheets.append(balance_sheet)
+            values = augmented_stock_with_balance.values()
+            if augmented_stock_with_balance:
+                balance_sheet = pl.concat(augmented_stock_with_balance.values()).select('server_id', 'balance', 'profit').with_columns(time_step= t)
+                balance_sheets.append(balance_sheet)
             
         slots = { slot['datacenter_id'] : slot['slots_size'] for slot in stock.group_by('datacenter_id').agg(F('slots_size').sum()).to_dicts() }
         _datacenters = { datacenter['datacenter_id'] : datacenter['slots_capacity'] for datacenter in datacenters.to_dicts() }
@@ -509,22 +562,6 @@ def get_my_solution(
                     assert DC_SCOPED_SERVERS.get((id, G), 0) == db_scoped_servers.get((id, G), 0), f"Database and DC_SCOPED_SERVERS are out of sync for {id}"
 
         old_expiry_list = expiry_list
-
-    # balance_sheet.group_by('server_id').agg(F('time_step').last() - F('time_step').first(), F('balance').last(), F('profit').last()).filter(F('balance') < 0.0).sort('balance')
-
-    # COUNTS THE TIME STEPS WHERE SERVERS MADE NO PROFIT
-    # balance_sheet.filter(F('profit') == 0.0).group_by('server_id').agg(F('profit').count()).sort('profit')
-    
-    # balance_sheet = pl.concat(balance_sheets)
-    # bad_servers = set(balance_sheet.group_by('server_id').agg(F('time_step').last(), F('balance').last()).filter(F('balance') < - 300_000).sort('balance')['server_id'][:-1])
-    # breakpoint()
-
-    # k = []
-    # for action in actions:
-    #     if action['server_id'] in bad_servers:
-    #         if action['action'] == 'buy':
-    #             action['time_step'] += 30
-    #     k.append(action)
         
     # actions = k # → 993267430.358398
     # actions = actions # → 993023338.5467423
