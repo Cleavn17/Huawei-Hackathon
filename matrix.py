@@ -73,8 +73,7 @@ for seed in seeds:
         mutated_solution_path = f'/tmp/{code}-mutated.json'
         with open(mutated_solution_path, 'w') as f: json.dump(mutated_solution, f)
         mutated_score = mods_E[(N_j, T_j)] if (N_j, T_j) in mods_E else evaluation_function(load_solution(mutated_solution_path), demand, datacenters, servers, selling_prices, seed=seed, verbose=args.verbose, actual_demand=actual_demand) ; mods_E[(N_j, T_j)] = mutated_score
-
-        print(f'Got ({int(score):,}, {int(mutated_score):,}) for {code}')
+        
         report = {
             'seed' : seed,
             'code' : code,
@@ -84,18 +83,37 @@ for seed in seeds:
         }
         with open (f'/tmp/{code}-report.json', 'w') as f: json.dump(report, f)
         scores.append(report)
-        
-        if high_score is None or score > high_score:
-            high_score = score
+
+        if high_score is None or score > high_score or mutated_score > high_score:
+            report_path = join(args.session, "reports", f'{seed}.json')
+            solution_path = join(args.session, "solutions", f'{seed}.json')
+            maybe_high_score = max(high_score or 0.0, mutated_score, score)
+            
+            if Path(report_path).exists():
+                with open(report_path) as f: existing_report = json.load(f)
+                
+                existing_high_score = max(existing_report['score'], existing_report['mutated_score'])
+                if existing_high_score > maybe_high_score:
+                    print(f'\t⚠ Not writing as actual high score for {seed} is {existing_high_score} ({existing_report["code"]})')
+                    high_score = existing_high_score
+                    high_score_code = existing_report['code']
+                    continue
+            
+            if high_score is None or score > high_score:
+                print(f"Reached new high score !!!")
+                with open(solution_path, 'w') as f: json.dump(solution, f)
+                with open(report_path, 'w') as f: json.dump(report, f)
+
+            if high_score is None or mutated_score > high_score:
+                print(f"Reached new high score (MUTANT) !!!")
+                with open(solution_path, 'w') as f: json.dump(mutated_solution, f)
+                with open(report_path, 'w') as f: json.dump(report, f)
+
+            high_score = maybe_high_score
             high_score_code = code
-            print(f"REACHED NEW HIGH SCORE !!! {score} with {high_score_code}")
-            with open(join(args.session, "solutions", f'{seed}.json'), 'w') as f: json.dump(solution, f)
-            with open(join(args.session, "reports", f'{seed}.json'), 'w') as f: json.dump(report, f)
-        
-        if high_score is None or mutated_score > high_score:
-            high_score = mutated_score
-            high_score_code = code
-            print(f"REACHED NEW HIGH SCORE (MUTANT) !!! {high_score} with {high_score_code}")
-            with open(join(args.session, "solutions", f'{seed}.json'), 'w') as f: json.dump(mutated_solution, f)
-            with open(join(args.session, "reports", f'{seed}.json'), 'w') as f: json.dump(report, f)
+
+            print(f"\tseed: {seed}, score: {int(high_score):,}, code: {high_score_code}")
+
+        else:
+            print(f'Got ({int(score):,}, {int(mutated_score):,}) for {code}')
 

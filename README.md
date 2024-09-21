@@ -1,4 +1,4 @@
-># Running the Naive Solution
+# Running the Naive Solution
 
 ## VENV Stuff
 
@@ -19,7 +19,7 @@ Zip the seeds (?). IDK how to do this not going to lie.
 
 ```
 zip seeds.zip ./output/*.json
-zip -r code.zip mysolution.py timemachine.py test_seeds data naive.py utils.py seeds.py requirements.txt evaluation.py evaluation_example.py matrix.py README.md
+rm code.zip ; zip -r code.zip mysolution.py timemachine.py test_seeds data naive.py utils.py seeds.py requirements.txt evaluation.py evaluation_example.py matrix.py README.md
 ```
 
 ## Hyperparameter Tuning
@@ -31,6 +31,12 @@ NAIVE_LOG_LEVEL=ERROR TIME_MACHINE_LOG_LEVEL=ERROR <test_seeds xargs -P 10 -I {}
 ```
 
 Hyper parameter tuning should increase your result by about 2% after about 3 hours. The efficacy of this approach is directly proportional to how fast the solution runs and how fast evaluation runs. The method used is grid search.
+
+I reccomend using a codespace in Microsoft GitHub for doing hyper parameter search and copying the files over intermittently.
+
+```
+while : ; do ssh codespace 'cd /workspaces/Huawei-Hackathon/kurd/solutions/ ; { cat ../reports/*.json | jq .score ; } | paste -sd + | bc ; rm -f seeds.zip ; >/dev/null zip -r9 seeds.zip *.json' ; rsync codespace:/workspaces/Huawei-Hackathon/kurd/solutions/seeds.zip /tmp/ ; sleep 30 ; done
+```
 
 ## Using the Time Machine
 
