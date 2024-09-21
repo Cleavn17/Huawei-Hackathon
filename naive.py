@@ -184,6 +184,14 @@ def get_my_solution(
         ages_DG = { k : v.with_columns(k=t - F('time_step'))['k'] for k, v in existing.items() }
         
         for I, G, _ in demand_profiles:
+            server = get_server_with_selling_price(I, G)
+            global_servers_in_stock = sum(DC_SCOPED_SERVERS.get((candidate['datacenter_id'], G), 0) for candidate in DBS[I])
+            
+            D_ig_real = int(IG_dmd[G].filter(F('time_step') == t)[I].mean() or 0)
+            if D_ig_real >= global_servers_in_stock * server["capacity"]:
+                # we are well saturated, no need to expire anything
+                continue
+            
             # need to make more wholistic …
             for candidate in DBS[I]:
                 datacenter_id = candidate['datacenter_id']
