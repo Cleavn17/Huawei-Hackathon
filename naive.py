@@ -3,7 +3,7 @@
 # is ifreann te gan reasun
 # an cod faoi bhun
 
-from pandas.core.frame import itertools
+import itertools
 import math
 from utils import load_problem_data
 import numpy as np
@@ -106,6 +106,15 @@ def get_my_solution(
     
     server_generations = ["GPU.S1", "GPU.S2", "GPU.S3", "CPU.S1", "CPU.S2", "CPU.S3", "CPU.S4"]
     latency_sensitivities = ["low", "high", "medium"]
+    pricing_strategy = [
+        {
+            "time_step" : 1,
+            "latency_sensitivity" : i,
+            "server_generation" : g,
+            "price": get_server_with_selling_price(i, g)["selling_price"]
+        }
+        for i, g in itertools.product(latency_sensitivities, server_generations)
+    ]
 
     stock_schema = {
         'time_step' : pl.Int64,
@@ -510,9 +519,9 @@ def get_my_solution(
     # actions = actions # → 993023338.5467423
     
     if return_stock_log:
-        return actions, [], stocks
+        return actions, pricing_strategy, stocks
     else:
-        return actions, []
+        return actions, pricing_strategy
 
 if __name__ == "__main__":
     demand, *_ = load_problem_data()
