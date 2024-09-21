@@ -1,4 +1,4 @@
-# caith do dhochas agus do gui sa bhruascar
+# caith do dhochas agus do ghui sa bhruascar
 # nil aon usaid acu
 # is ifreann te gan reasun
 # an cod faoi bhun
