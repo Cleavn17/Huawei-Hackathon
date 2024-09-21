@@ -73,14 +73,15 @@ from dataclasses import dataclass
 
 @dataclass
 class Parameters:
-    expiry_lookahead: int = 10
+    expiry_lookahead: int = 11
     break_even_coefficient: float = 1/3
-    reap_delta: int = 5
+    reap_delta: int = 2
 
 Parameters.MATRIX = {
     'expiry_lookahead' : [ 8, 9, 10, 11, 12 ],
-    'break_even_coefficient' : [ 0, 1/4, 1/3, 1/5 ],
-    'reap_delta' : [ 3, 5, 7 ]
+    'break_even_coefficient' : [ -1/4, 0, 1/4, 1/3 ],
+    # 'reap_delta' : [ 3, 5, 7 ]
+    'reap_delta' : [ 2, 3, 4, 5 ]
 }
 
 @profile
@@ -92,7 +93,7 @@ def get_my_solution(
         return_stock_log = False
 ) -> list:
     demand = pl.DataFrame(demand)
-    _, datacenters, servers, selling_prices = [pl.DataFrame(df) for df in load_problem_data()]
+    _, datacenters, servers, selling_prices, elasticity = [pl.DataFrame(df) for df in load_problem_data()]
 
     @lru_cache
     def get_server_with_selling_price(i, g) -> dict:
@@ -259,15 +260,34 @@ def get_my_solution(
                     # Really, we should run some code like `projected_fleet_profit` here instead of blindly harvesting servers that we were going to throw away
                     pool = expiry_pool.get(G, [])
                     amount_to_take_from_pool = min(need, len(pool))
+
                     existing_capacity = sum(DC_SCOPED_SERVERS.get((candidate['datacenter_id'], G), 0) * server["capacity"] for candidate in DBS[I])
                     # Assume that when the demand falls below the existing capacity, no capacity will go to the new servers
                     demands = { d['time_step'] : max(0, d[I] - existing_capacity)  for d in IG_dmd[G]['time_step', I].to_dicts() }
+                    
                     if amount_to_take_from_pool > 0:
                         taken = pool[-amount_to_take_from_pool:]
                         untaken = pool[:-amount_to_take_from_pool]
+                        
                         expiry_pool[G] = untaken
                         need -= len(taken)
                         moved = stock.filter(F('server_id').is_in(taken) & (F('datacenter_id') != datacenter_id))
+
+                        # sneed = [projected_fleet_profit(
+                        #     t=t,
+                        #     n=len(moved),
+                        #     server=server,
+                        #     demands=demands,
+                        #     cost_of_energy=candidate["cost_of_energy"],
+                        #     all=True,
+                        #     ages=t - moved['time_step'] + 1,
+                        #     lookahead=10,
+                        #     ratios=[r],
+                        #     initial_balance_per_server=-(r * 1000 + (1- r) * server["purchase_price"])
+                        # )[0] for r in [1.0, 0.8, 0.6, 0.4, 0.2, 0.0]]
+                        # 
+                        # breakpoint()
+                        
                         stock = stock.with_columns(
                             datacenter_id=pl.when(F('server_id').is_in(taken)).then(pl.lit(datacenter_id)).otherwise('datacenter_id'),
                             latency_sensitivity=pl.when(F('server_id').is_in(taken)).then(pl.lit(I)).otherwise('latency_sensitivity')
@@ -490,9 +510,9 @@ def get_my_solution(
     # actions = actions # → 993023338.5467423
     
     if return_stock_log:
-        return actions, stocks
+        return actions, [], stocks
     else:
-        return actions
+        return actions, []
 
 if __name__ == "__main__":
     demand, *_ = load_problem_data()
