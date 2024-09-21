@@ -24,9 +24,20 @@ logger = logging.getLogger("naive")
 logger.setLevel(logging.DEBUG)
 logger.addHandler(handler)
 
+# Takes an array servers considers the cost of energy and maintentance
+# of each server and also considers the selling price of the services
+# that the server can provide. It then extrapolates into the future
+# using predicted demand and the selling price to determine how much
+# profit the server will make in the future.
+
+# This function is actually broken now since selling price can change
+# at every time step but this function assumes that it doesn't change.
+
 @profile
 def projected_fleet_profit(
+        # The number of servers to consider the profit for
         n,
+        
         cost_of_energy,
         server, demands,
         t,
