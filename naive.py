@@ -105,8 +105,7 @@ def get_my_solution(
         return_stock_log = False,
         limit=168
 ) -> list:
-    demand = pl.DataFrame(demand)
-    _, datacenters, servers, selling_prices, elasticity = [pl.DataFrame(df) for df in load_problem_data()]
+    demand, datacenters, servers, selling_prices, elasticity = [pl.DataFrame(df) for df in (demand, *load_problem_data()[1:])]
 
     elasticity_IG = { ig: e for ig, e in elasticity.group_by(['latency_sensitivity', 'server_generation']) }
     
