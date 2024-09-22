@@ -118,6 +118,7 @@ def get_my_solution(
     
     current_server_index = 1
     actions = []
+    trace = []
 
     server_generations, latency_sensitivities = get_demand_segments()
 
@@ -180,9 +181,14 @@ def get_my_solution(
         return dropped[False] if False in dropped else pl.DataFrame(schema=stock_schema)
 
     old_expiry_list = []
+
+    DBS_raw = { I : v for [I], v in datacenters.group_by('latency_sensitivity') }
+    DBS = { I : v.to_dicts() for [I], v in datacenters.group_by('latency_sensitivity') }
+    IG_base_demand = { G : v for [G], v in demand.group_by('server_generation') }
     
     for t in range(limit):
         t = t + 1
+        step_trace = {}
 
         # When we purchase servers, we add a mark at the current
         # timestap plus the life expectancy of the server to indicate
@@ -199,16 +205,14 @@ def get_my_solution(
             stock = expire_ids(dead_ids)
     
         existing = { k : v for k, v in stock.group_by(['datacenter_id', 'server_generation']) }
-        demand_profiles = []
-
-        DBS_raw = { I : v for [I], v in datacenters.group_by('latency_sensitivity') }
-        DBS = { I : v.to_dicts() for [I], v in datacenters.group_by('latency_sensitivity') }
+        
         IG_existing_sum = { k : v['slots_size'].sum() for k, v in stock.group_by(['latency_sensitivity', 'server_generation']) }
+        demand_profiles = []
 
         # basically used as a way of taking an I-G pair and finding
         # the demand over a certain amount of timesteps. E.g. doing
         # averages and what not.
-        IG_dmd = { G : v for [G], v in demand.group_by('server_generation') }
+        
         
         for I in latency_sensitivities:
             for G in server_generations:
@@ -216,7 +220,7 @@ def get_my_solution(
                 E_ig = DBS_raw[I]['cost_of_energy'].mean()
                 capacity_to_offer = sum(candidate['slots_capacity'] for candidate in DBS[I]) - IG_existing_sum.get((I, G), 0)
                 n = capacity_to_offer // S['slots_size']
-                demands = { d['time_step'] : d[I] for d in IG_dmd[G]['time_step', I].to_dicts() }
+                demands = { d['time_step'] : d[I] for d in IG_base_demand[G]['time_step', I].to_dicts() }
                 [(_, profit)] = projected_fleet_profit(t=t, n=n, cost_of_energy=E_ig, server=S, demands=demands, all=True, lookahead=40)
                 demand_profiles.append((I, G, profit))
 
@@ -229,7 +233,7 @@ def get_my_solution(
             server = get_server_with_selling_price(I, G)
             global_servers_in_stock = sum(DC_SCOPED_SERVERS.get((candidate['datacenter_id'], G), 0) for candidate in DBS[I])
             
-            D_ig_real = int(IG_dmd[G].filter(F('time_step') == t)[I].mean() or 0)
+            D_ig_real = int(IG_base_demand[G].filter(F('time_step') == t)[I].mean() or 0)
             if D_ig_real >= global_servers_in_stock * server["capacity"]:
                 # we are well saturated, no need to expire anything
                 continue
@@ -244,13 +248,13 @@ def get_my_solution(
                     continue
 
                 # If the demand saturates our servers, ignore the fact that the future may be bleak and make hay while the sun shines
-                demands = { d['time_step'] : d[I] for d in IG_dmd[G]['time_step', I].to_dicts() }
+                demands = { d['time_step'] : d[I] for d in IG_base_demand[G]['time_step', I].to_dicts() }
                 ages = ages_DG[(datacenter_id, G)]
 
-                D_ig_old       = int(IG_dmd[G].filter(F('time_step').is_between(t - 1, t - 1 + parameters.expiry_lookahead))[I].mean() or 0)
-                D_ig           = int(IG_dmd[G].filter(F('time_step').is_between(t,     t     + parameters.expiry_lookahead))[I].mean() or 0)
-                D_ig_next      = int(IG_dmd[G].filter(F('time_step').is_between(t + 1, t + 1 + parameters.expiry_lookahead))[I].max() or 0)
-                D_ig_next_next = int(IG_dmd[G].filter(F('time_step').is_between(t + 2, t + 2 + parameters.expiry_lookahead))[I].max() or 0)
+                D_ig_old       = int(IG_base_demand[G].filter(F('time_step').is_between(t - 1, t - 1 + parameters.expiry_lookahead))[I].mean() or 0)
+                D_ig           = int(IG_base_demand[G].filter(F('time_step').is_between(t,     t     + parameters.expiry_lookahead))[I].mean() or 0)
+                D_ig_next      = int(IG_base_demand[G].filter(F('time_step').is_between(t + 1, t + 1 + parameters.expiry_lookahead))[I].max() or 0)
+                D_ig_next_next = int(IG_base_demand[G].filter(F('time_step').is_between(t + 2, t + 2 + parameters.expiry_lookahead))[I].max() or 0)
                 
                 servers_needed_to_meet_demand = D_ig // server['capacity']
                 servers_needed_to_meet_demand_next = D_ig_next // server['capacity']
@@ -287,7 +291,7 @@ def get_my_solution(
                 datacenter_id = candidate['datacenter_id']
                 
                 slots_capacity = candidate['slots_capacity']
-                D_ig = int(IG_dmd[G].filter(F('time_step') == t)[I].mean() or 0)
+                D_ig = int(IG_base_demand[G].filter(F('time_step') == t)[I].mean() or 0)
                 server = get_server_with_selling_price(I, G)
                 slots_size = server['slots_size']
                 servers_needed_to_meet_demand = D_ig // server['capacity']
@@ -311,7 +315,7 @@ def get_my_solution(
                     amount_to_take_from_pool = min(need, len(pool))
                     existing_capacity = sum(DC_SCOPED_SERVERS.get((candidate['datacenter_id'], G), 0) * server["capacity"] for candidate in DBS[I])
                     # Assume that when the demand falls below the existing capacity, no capacity will go to the new servers
-                    demands = { d['time_step'] : max(0, d[I] - existing_capacity)  for d in IG_dmd[G]['time_step', I].to_dicts() }
+                    demands = { d['time_step'] : max(0, d[I] - existing_capacity)  for d in IG_base_demand[G]['time_step', I].to_dicts() }
                     
                     if amount_to_take_from_pool > 0:
                         taken = pool[-amount_to_take_from_pool:]
@@ -346,7 +350,7 @@ def get_my_solution(
                         
                         # When shit is sunshine and rainbows and there is some stock quantity we can purchase which is profitable even if the minimum demand was sustained for a very long time
                         
-                        other_perspective = np.clip(((IG_dmd[G].filter(F('time_step').is_between(t, t + parameters.expiry_lookahead * 3))[I].min() or 0) - existing_capacity) / server["capacity"] / need, 0.0, 1.0)
+                        other_perspective = np.clip(((IG_base_demand[G].filter(F('time_step').is_between(t, t + parameters.expiry_lookahead * 3))[I].min() or 0) - existing_capacity) / server["capacity"] / need, 0.0, 1.0)
                         if other_perspective < 1.0:
                             other_perspectives = [other_perspective]
                             steps_to_consider = 10
@@ -499,7 +503,7 @@ def get_my_solution(
             
             for (I, G), S in augmented_stock:
                 demand_met = len(S) * S['capacity'][0]
-                d = IG_dmd[G].filter(F('time_step') == t)[I]
+                d = IG_base_demand[G].filter(F('time_step') == t)[I]
                 d = d.item() if len(d) == 1 else 0.0
                 Ud = min(demand_met, d) / demand_met
                 ig_utilisations.append(Ud)
