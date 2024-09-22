@@ -92,7 +92,6 @@ class Parameters:
 Parameters.MATRIX = {
     'expiry_lookahead' : [ 8, 9, 10, 11, 12 ],
     'break_even_coefficient' : [ -1/4, 0, 1/4, 1/3 ],
-    # 'reap_delta' : [ 3, 5, 7 ]
     'reap_delta' : [ 2, 3, 4, 5 ]
 }
 
@@ -214,7 +213,6 @@ def get_my_solution(
         # the demand over a certain amount of timesteps. E.g. doing
         # averages and what not.
         
-        
         for I, G in itertools.product(latency_sensitivities, server_generations):
             S = get_server_with_selling_price(I, G)
             E_ig = DBS_raw[I]['cost_of_energy'].mean()
@@ -305,8 +303,21 @@ def get_my_solution(
                 # servers_in_stock = DC_SCOPED_SERVERS.get((datacenter_id, G), 0)
                 # Use global perspective to maximise utilisation (minimise underutilisation)
                 servers_in_stock = sum(DC_SCOPED_SERVERS.get((candidate['datacenter_id'], G), 0) for candidate in DBS[I])
-                
-                if servers_in_stock < servers_needed_to_meet_demand:
+                if servers_in_stock > servers_needed_to_meet_demand:
+                    # demand_max = servers_in_stock * server["capacity"]
+                    # demand_delta = demand_max / base_demand - 1
+                    # relevant_elasticity = elasticity_IG[I, G]['elasticity'][0]
+                    # target_price = server["selling_price"] * (1 + (demand_delta - 1) / relevant_elasticity)
+                    # assert target_price < 0.0
+                    # logger.debug(f"(t={t} {I}-{G}) TEM: {demand_max}, ESAB: {base_demand}, ΔDᵢg: {demand_delta}, →$: {target_price}, og: {server['selling_price']}")
+                    # if new_strategy is None:
+                    #     new_strategy = create_pricing_strategy(I, G, target_price, t)
+                    #     # new_strategy = get_default_pricing_strategy_for_demand_segment(I, G, t=t)
+                    #     pass
+                    # modified_prices[(I, G)] = float(target_price)
+                    # modified_demands[(I, G)] = int(demand_max)
+                    pass
+                elif servers_in_stock < servers_needed_to_meet_demand:
                     
                     capacity_remaining = slots_capacity - slots_used_in_datacenter
                     assert capacity_remaining >= 0, f"capacity remaining ({capacity_remaining}) ought to be >=0"

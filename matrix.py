@@ -124,7 +124,7 @@ for seed in seeds:
 
             if high_score is None or mutated_score > high_score:
                 print(f"Reached new high score (MUTANT) !!!")
-                with open(solution_path, 'w') as f: json.dump(mutated_solution, f)
+                with open(solution_path, 'w') as f: save_solution(fleet, solution, f)
                 with open(report_path, 'w') as f: json.dump(report, f)
 
             high_score = maybe_high_score

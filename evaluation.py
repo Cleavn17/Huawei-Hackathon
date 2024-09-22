@@ -464,7 +464,8 @@ def get_evaluation(fleet,
                    elasticity,
                    time_steps=get_known('time_steps'), 
                    verbose=1,
-                   actual_demand=None):
+                   actual_demand=None,
+                   seed=None):
 
     # SOLUTION EVALUATION
 
@@ -484,9 +485,13 @@ def get_evaluation(fleet,
     demand = actual_demand if actual_demand is not None else get_actual_demand(demand)
     OBJECTIVE = 0
     FLEET = pd.DataFrame()
+    
     trace = []
+    convergence_trace = []
+    
     # if ts-related fleet is empty then current fleet is ts-fleet
     for ts in range(1, time_steps+1):
+        convergence_trace_atom = {}
 
         # GET THE ACTUAL DEMAND AT TIMESTEP ts
         D = get_time_step_demand(demand, ts)
@@ -521,25 +526,31 @@ def get_evaluation(fleet,
             for I in D.columns:
                 for G in D.index:
                     if I == 'low' and G == 'CPU.S1' or True:
+
                         S = selling_prices
                         B = base_prices
+                        
+                        bunion = dict(
+                            demand_ = D.loc[G, I].item(),
+                            original_demand = OD.loc[G, I].item(),
+                            price = S.loc[G, I].item(),
+                            original_price = B.loc[G, I].item(),
+                            capacity = Zf.loc[G, I].item(),
+                            count = Cf.loc[G, I].item()
+                        )
+                        
+                        convergence_trace_atom[f"{I}-{G}"] = bunion
+                        
                         try:
-                            print(f"\t(t={ts} {I}-{G}) demand: {D.loc[G, I]} ({OD.loc[G, I]}), p: {S.loc[G, I]} ({B.loc[G, I]}), capacity: {Zf.loc[G, I]}, count: {Cf.loc[G, I]}")
+                            # print(f"\t(t={ts} {I}-{G}) demand: {demand_} ({original_price}), p: {price} ({original_price}), capacity: {capacity}, count: {count}")
+                            pass
                         except:
                             pass
 
             # CHECK CONSTRAINTS
             check_datacenter_slots_size_constraint(FLEET)
 
-            # EVALUATE THE OBJECTIVE FUNCTION AT TIMESTEP ts
-            # U = get_utilization(D, Zf)
-
-            # L = get_normalized_lifespan(FLEET)
-
-            P = get_profit(D, 
-                           Zf, 
-                           selling_prices,
-                           FLEET)
+            P = get_profit(D, Zf, selling_prices, FLEET)
 
             OBJECTIVE += P
 
@@ -547,21 +558,22 @@ def get_evaluation(fleet,
             FLEET = put_fleet_on_hold(FLEET)
 
             # PREPARE OUTPUT
-            output = {'time-step': ts,
-                      'O': round(OBJECTIVE, 2),
-                      'P': round(P, 2)}
+            output = {'time-step': ts, 'O': round(OBJECTIVE, 2), 'P': round(P, 2)}
         else:
             # PREPARE OUTPUT
-            output = {'time-step': ts,
-                      'O': np.nan,
-                      'P': np.nan}
+            output = {'time-step': ts, 'O': np.nan, 'P': np.nan}
 
+        trace.append(OBJECTIVE)
+        convergence_trace.append(convergence_trace_atom)
+        
         if verbose:
-            trace.append(OBJECTIVE)
             print(output)
 
-        with open("etrace.json", "w") as ef:
-            json.dump(trace, ef)
+    with open(f"convergetrace-{seed}.json", "w") as ct:
+        json.dump(convergence_trace, ct)
+
+    with open(f"etrace-{seed}.json", "w") as ef:
+        json.dump(trace, ef)
             
     return OBJECTIVE
 
@@ -621,7 +633,7 @@ def evaluation_function(fleet,
     try:
         # Truncate file
         with open("/tmp/a", "w") as f: pass
-        return get_evaluation(fleet, pricing_strategy, demand, datacenters, servers, selling_prices, elasticity, time_steps=time_steps, verbose=verbose, actual_demand=actual_demand)
+        return get_evaluation(fleet, pricing_strategy, demand, datacenters, servers, selling_prices, elasticity, time_steps=time_steps, verbose=verbose, actual_demand=actual_demand, seed=seed)
     # CATCH EXCEPTIONS
     except Exception as e:
         logger.error(e)

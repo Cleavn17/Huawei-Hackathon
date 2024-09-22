@@ -1,7 +1,4 @@
-
-
-from utils import (load_problem_data,
-                   load_solution)
+from utils import (load_problem_data, load_solution)
 from evaluation import evaluation_function
 
 from argparse import ArgumentParser
@@ -23,6 +20,3 @@ demand, datacenters, servers, selling_prices, elasticity = load_problem_data()
 score = evaluation_function(fleet, pricing_strategy, demand, datacenters, servers, selling_prices, elasticity, seed=seed, verbose=args.verbose)
 
 print(f'Solution score: {int(score):,}')
-
-
-
