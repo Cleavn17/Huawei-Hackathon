@@ -45,3 +45,9 @@ python3 mysolution.py --seed 123 --mutate output/123.json
 ```
 
 The time machine doesn't really work as well as I thought it would.
+
+## Plotting
+
+```
+python3 plot.py
+```
