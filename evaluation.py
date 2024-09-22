@@ -1,5 +1,6 @@
 
 
+import json
 import logging
 import numpy as np
 import pandas as pd
@@ -454,7 +455,7 @@ def get_evaluation(fleet,
                    elasticity,
                    time_steps=get_known('time_steps'), 
                    verbose=1,
-                   limit=168):
+                   actual_demand=None):
 
     # SOLUTION EVALUATION
 
@@ -471,9 +472,10 @@ def get_evaluation(fleet,
     base_prices = selling_prices.copy()
 
     # DEMAND DATA PREPARATION
-    demand = get_actual_demand(demand)
+    demand = actual_demand if actual_demand is not None else get_actual_demand(demand)
     OBJECTIVE = 0
     FLEET = pd.DataFrame()
+    trace = []
     # if ts-related fleet is empty then current fleet is ts-fleet
     for ts in range(1, time_steps+1):
 
@@ -546,7 +548,11 @@ def get_evaluation(fleet,
                       'P': np.nan}
 
         if verbose:
+            trace.append(OBJECTIVE)
             print(output)
+
+        with open("etrace.json", "w") as ef:
+            json.dump(trace, ef)
             
     return OBJECTIVE
 
@@ -558,9 +564,10 @@ def evaluation_function(fleet,
                         servers,
                         selling_prices,
                         elasticity,
-                        time_steps=get_known('time_steps'), 
+                        time_steps=get_known('time_steps'),
                         seed=None,
-                        verbose=0):
+                        verbose=0,
+                        actual_demand=None):
 
     """
     Evaluate a solution for the Tech Arena Phase 1 problem.
@@ -605,7 +612,7 @@ def evaluation_function(fleet,
     try:
         # Truncate file
         with open("/tmp/a", "w") as f: pass
-        return get_evaluation(fleet, pricing_strategy, demand, datacenters, servers, selling_prices, elasticity, time_steps=time_steps, verbose=verbose)
+        return get_evaluation(fleet, pricing_strategy, demand, datacenters, servers, selling_prices, elasticity, time_steps=time_steps, verbose=verbose, actual_demand=actual_demand)
     # CATCH EXCEPTIONS
     except Exception as e:
         logger.error(e)
