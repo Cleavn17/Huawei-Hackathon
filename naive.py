@@ -284,7 +284,9 @@ def get_my_solution(
 
         for I, G, _ in demand_profiles:
             global_servers_in_stock = sum(DC_SCOPED_SERVERS.get((candidate['datacenter_id'], G), 0) for candidate in DBS[I])
-            price_changed = False
+            
+            new_strategy = None
+
             for candidate in DBS[I]:
                 datacenter_id = candidate['datacenter_id']
                 
@@ -397,21 +399,19 @@ def get_my_solution(
                                     if demand_met > base_demand:
                                         # In this case we really need to just sell or hold servers until demand goes up again
                                         pass
+                                    
                                     elif demand_met <= base_demand:
                                         # In this case we can decrease the current demand by increasing the selling prices
                                         demand_delta = demand_met / base_demand - 1
                                         # ratio = demand_met / base_demand - 1
                                         relevant_elasticity = elasticity_IG[I, G]['elasticity'][0]
                                         target_price = server["selling_price"] * (demand_delta / relevant_elasticity + 1)
-                                        new_strategy = create_pricing_strategy(I, G, target_price, t)
-                                        # new_strategy = get_default_pricing_strategy_for_demand_segment(I, G, t=t)
-                                        logger.debug(f"(t={t} {I}-{G}) MET: {demand_met}, BASE: {base_demand}, ΔDᵢg: {demand_delta}, →$: {target_price}, og: {server['selling_price']}")
                                         
-                                        if not price_changed:
-                                            # PRICING STRATEGY CHANGE
-                                            pricing_strategy.append(new_strategy)
-                                            
-                                        price_changed = True
+                                        logger.debug(f"(t={t} {I}-{G}) MET: {demand_met}, BASE: {base_demand}, ΔDᵢg: {demand_delta}, →$: {target_price}, og: {server['selling_price']}")
+                                        if new_strategy is None:
+                                            new_strategy = create_pricing_strategy(I, G, target_price, t)
+                                            # new_strategy = get_default_pricing_strategy_for_demand_segment(I, G, t=t)
+                                            pass
 
                             
                         if t >= server["release_start"] and t <= server["release_end"] and is_profitable_scenario:
@@ -438,10 +438,8 @@ def get_my_solution(
 
                             delta = parameters.reap_delta
                             dc_servers_to_delete_at[t + server['life_expectancy'] - delta] = dc_servers_to_delete_at.get(t + server['life_expectancy'] - delta, []) + [server['server_id'] for server in buy_actions]
-                            
-            if not price_changed:
-                # PRICING STRATEGY CHANGE
-                pricing_strategy.append(get_default_pricing_strategy_for_demand_segment(I, G, t=t))
+
+            pricing_strategy.append(get_default_pricing_strategy_for_demand_segment(I, G, t=t) if new_strategy is None else new_strategy)
 
         excess_ids = []
         for G in server_generations:
