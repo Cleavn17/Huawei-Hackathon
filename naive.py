@@ -291,7 +291,7 @@ def get_my_solution(
                 datacenter_id = candidate['datacenter_id']
                 
                 slots_capacity = candidate['slots_capacity']
-                D_ig = int(IG_base_demand[G].filter(F('time_step') == t)[I].mean() or 0)
+                base_demand = D_ig = int(IG_base_demand[G].filter(F('time_step') == t)[I].mean() or 0)
                 server = get_server_with_selling_price(I, G)
                 slots_size = server['slots_size']
                 servers_needed_to_meet_demand = D_ig // server['capacity']
@@ -384,8 +384,6 @@ def get_my_solution(
 
                             # pricing_strategy.append(get_default_pricing_strategy_for_demand_segment(I, G, t=t))
                         else:
-                            base_demand = D_ig
-                            
                             logger.debug(f"\tDon't drop €{int(need*P):,} on {need} more {I}-{G} servers!")
                             
                             if global_servers_in_stock > 0:
