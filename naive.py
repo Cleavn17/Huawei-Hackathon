@@ -213,15 +213,14 @@ def get_my_solution(
         # averages and what not.
         
         
-        for I in latency_sensitivities:
-            for G in server_generations:
-                S = get_server_with_selling_price(I, G)
-                E_ig = DBS_raw[I]['cost_of_energy'].mean()
-                capacity_to_offer = sum(candidate['slots_capacity'] for candidate in DBS[I]) - IG_existing_sum.get((I, G), 0)
-                n = capacity_to_offer // S['slots_size']
-                demands = { d['time_step'] : d[I] for d in IG_base_demand[G]['time_step', I].to_dicts() }
-                [(_, profit)] = projected_fleet_profit(t=t, n=n, cost_of_energy=E_ig, server=S, demands=demands, all=True, lookahead=40)
-                demand_profiles.append((I, G, profit))
+        for I, G in itertools.product(latency_sensitivities, server_generations):
+            S = get_server_with_selling_price(I, G)
+            E_ig = DBS_raw[I]['cost_of_energy'].mean()
+            capacity_to_offer = sum(candidate['slots_capacity'] for candidate in DBS[I]) - IG_existing_sum.get((I, G), 0)
+            n = capacity_to_offer // S['slots_size']
+            demands = { d['time_step'] : d[I] for d in IG_base_demand[G]['time_step', I].to_dicts() }
+            [(_, profit)] = projected_fleet_profit(t=t, n=n, cost_of_energy=E_ig, server=S, demands=demands, all=True, lookahead=40)
+            demand_profiles.append((I, G, profit))
 
         demand_profiles = sorted(demand_profiles, key=lambda p: -p[2])
         expiry_pool = {}
