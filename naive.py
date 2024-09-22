@@ -419,7 +419,6 @@ def get_my_solution(
                                         
                                         modified_prices[(I, G)] = float(target_price)
                                         modified_demands[(I, G)] = int(demand_met)
-
                             
                         if t >= server["release_start"] and t <= server["release_end"] and is_profitable_scenario:
                             warning = f"([38;2;255;0;0m🤡 {I}-{G} was expired last round! 🤡[m)" if f'{I}-{G}' in old_expiry_list else ""
@@ -512,10 +511,6 @@ def get_my_solution(
             trace.append(P)
 
         if True:
-            # bad code above
-            #
-            # good code below
-
             augmented_stock = stock.join(servers, on="server_generation") \
                 .join(selling_prices, on=["latency_sensitivity", "server_generation"]) \
                 .join(datacenters, on=['datacenter_id', 'latency_sensitivity'], how='inner') \
@@ -599,7 +594,7 @@ def get_my_solution(
         old_expiry_list = expiry_list
 
     with open("trace.json", "w") as f:
-        json.dump(trace ,f)
+        json.dump(trace, f)
         
     # actions = k # → 993267430.358398
     # actions = actions # → 993023338.5467423
