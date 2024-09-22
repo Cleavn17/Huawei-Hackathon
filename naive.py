@@ -101,8 +101,8 @@ rates = [0.0665550253495761, 0.07504024917250507, 0.07373038829090167, 0.0519003
 @profile
 def get_my_solution(
         demand,
-        assertions_enabled = True,
-        log_info = True,
+        assertions_enabled = False,
+        log_info = False,
         parameters = Parameters(),
         return_stock_log = False,
         limit=168

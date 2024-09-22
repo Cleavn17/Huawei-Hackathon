@@ -76,6 +76,8 @@ for seed in seeds:
         bases_E[N_j] = score
 
         mutated_score = 0.0
+        mutated_solution = solution
+        
         # mutated_solution = mutated_fleet, mutated_pricing_strategy = mods.get((N_j, T_j)) or mutate(actual_demand, solution_path)
         # mutated_fleet, mutated_pricing_strategy = pd.DataFrame(mutated_fleet), pd.DataFrame(mutated_pricing_strategy)
         # mods[(N_j, T_j)] = mutated_solution
@@ -85,16 +87,20 @@ for seed in seeds:
         # 
         # mutated_score = mods_E[(N_j, T_j)] if (N_j, T_j) in mods_E else evaluation_function(*load_solution(mutated_solution_path), demand, datacenters, servers, selling_prices, elasticity, seed=seed, verbose=args.verbose, actual_demand=actual_demand, time_steps=args.limit)
         # mods_E[(N_j, T_j)] = mutated_score
-        # 
-        # report = {
-        #     'seed' : seed,
-        #     'code' : code,
-        #     'path' : mutated_solution_path,
-        #     'score' : score,
-        #     'mutated_score' : mutated_score
-        # }
-        # with open (f'/tmp/{code}-report.json', 'w') as f: json.dump(report, f)
-        # scores.append(report)
+        #
+        
+        report = {
+            'seed' : seed,
+            'code' : code,
+            'path' : solution_path,
+            'score' : score,
+            'mutated_score' : mutated_score
+        }
+        
+        with open (f'/tmp/{code}-report.json', 'w') as f:
+            json.dump(report, f)
+            
+        scores.append(report)
 
         if high_score is None or score > high_score or mutated_score > high_score:
             report_path = join(args.session, "reports", f'{seed}.json')
