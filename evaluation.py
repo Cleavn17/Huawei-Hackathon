@@ -354,6 +354,7 @@ def get_normalized_lifespan(fleet):
     return (fleet['lifespan'] / fleet['life_expectancy']).sum() / fleet.shape[0]
 
 
+
 def get_profit(D, Z, selling_prices, fleet):
     # CALCULATE OBJECTIVE P = PROFIT
     R = get_revenue(D, Z, selling_prices)
@@ -374,11 +375,19 @@ def get_revenue(D, Z, selling_prices):
             r += min(z_ig, d_ig) * p_ig
     return r
 
-
 def get_cost(fleet):
-    # CALCULATE THE SERVER COST - PART 1
-    fleet['cost'] = fleet.apply(calculate_server_cost, axis=1)
-    return fleet['cost'].sum()
+    F = 0.0
+    for _, row in fleet.groupby(['datacenter_id', 'server_generation']):
+        X = row['lifespan'].values
+        XHAT = row['life_expectancy'].iloc[0]
+        R = len(X[X == 1]) * row['purchase_price'].iloc[0]
+        B = row['average_maintenance_fee'].iloc[0]
+        E = len(X) * row['energy_consumption'].iloc[0] * row['cost_of_energy'].iloc[0]
+        M = get_maintenance_cost(B, X, XHAT).sum()
+        MD = row['moved'].values
+        V = (MD[np.isfinite(MD)] * row['cost_of_moving'].iloc[0]).sum()
+        F += V + M + E + R
+    return F
 
 
 def calculate_server_cost(row):
