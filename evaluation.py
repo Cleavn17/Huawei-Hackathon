@@ -4,12 +4,19 @@ import logging
 import numpy as np
 import pandas as pd
 from scipy.stats import truncweibull_min
-
+from os import environ
+from sys import stdout
 
 # CREATE LOGGER
 logger = logging.getLogger()
+
 file_handler = logging.FileHandler('logs.log')
+
+stream_handler = logging.StreamHandler(stdout)
+stream_handler.setLevel(getattr(logging, environ.get('EVAL_LOG_LEVEL', 'DEBUG')))
+
 logger.addHandler(file_handler)
+logger.addHandler(stream_handler)
 
 formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
 file_handler.setFormatter(formatter)
@@ -503,7 +510,7 @@ def get_evaluation(fleet,
                         S = selling_prices
                         B = base_prices
                         try:
-                            logger.debug(f"\t(t={ts} {I}-{G}) demand: {D.loc[G, I]} ({OD.loc[G, I]}), p: {S.loc[G, I]} ({B.loc[G, I]}), capacity: {Zf.loc[G, I]}, count: {Cf.loc[G, I]}")
+                            print(f"\t(t={ts} {I}-{G}) demand: {D.loc[G, I]} ({OD.loc[G, I]}), p: {S.loc[G, I]} ({B.loc[G, I]}), capacity: {Zf.loc[G, I]}, count: {Cf.loc[G, I]}")
                         except:
                             pass
 

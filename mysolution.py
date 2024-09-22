@@ -34,7 +34,7 @@ for seed in seeds:
     fleet, pricing_strategy = pd.DataFrame(fleet), pd.DataFrame(pricing_strategy)
 
     if args.eval:
-        score = evaluation_function(fleet, pricing_strategy, demand, datacenters, servers, selling_prices, elasticity, seed=seed, time_steps=limit)    
+        score = evaluation_function(fleet, pricing_strategy, demand, datacenters, servers, selling_prices, elasticity, seed=seed, time_steps=limit, verbose=args.verbose)
         print(f"Got: {int(score):,}")
     
     # SAVE YOUR SOLUTION
