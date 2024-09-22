@@ -24,6 +24,12 @@ logger = logging.getLogger("naive")
 logger.setLevel(logging.DEBUG)
 logger.addHandler(handler)
 
+def get_demand_segments(complex=True):
+    if complex:
+        return (["GPU.S1", "GPU.S2", "GPU.S3", "CPU.S1", "CPU.S2", "CPU.S3", "CPU.S4"], ["low", "high", "medium"])
+    else:
+        return (["CPU.S1"], ["low"])
+
 # Takes an array servers considers the cost of energy and maintentance
 # of each server and also considers the selling price of the services
 # that the server can provide. It then extrapolates into the future
@@ -113,12 +119,7 @@ def get_my_solution(
     current_server_index = 1
     actions = []
 
-    if True:
-        server_generations = ["GPU.S1", "GPU.S2", "GPU.S3", "CPU.S1", "CPU.S2", "CPU.S3", "CPU.S4"]
-        latency_sensitivities = ["low", "high", "medium"]
-    else:
-        server_generations = ["CPU.S1"]
-        latency_sensitivities = ["low"]
+    server_generations, latency_sensitivities = get_demand_segments()
 
     def create_pricing_strategy(i: str, g: str, p: float, t: int):
         return {
