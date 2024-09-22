@@ -310,7 +310,10 @@ def get_valid_columns(cols1, cols2):
 
 def adjust_capacity_by_failure_rate(x):
     # HELPER FUNCTION TO CALCULATE THE FAILURE RATE f
-    return int(x * (1 - truncweibull_min.rvs(0.30, 0.05, 0.1, size=1).item()))
+    rate = truncweibull_min.rvs(0.30, 0.05, 0.1, size=1).item()
+    with open("/tmp/a", "a") as f:
+        print(f"{rate}", file=f)
+    return int(x * (1 - rate))
 
 
 def check_datacenter_slots_size_constraint(fleet):
@@ -600,6 +603,8 @@ def evaluation_function(fleet,
     np.random.seed(seed)
     # EVALUATE SOLUTION
     try:
+        # Truncate file
+        with open("/tmp/a", "w") as f: pass
         return get_evaluation(fleet, pricing_strategy, demand, datacenters, servers, selling_prices, elasticity, time_steps=time_steps, verbose=verbose)
     # CATCH EXCEPTIONS
     except Exception as e:
