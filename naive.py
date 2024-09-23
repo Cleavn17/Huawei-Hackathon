@@ -392,8 +392,6 @@ def get_my_solution(
                                     # if base demand is zero (nobody wants these servers anymore), then no amount of selling price
                                     # manipulation will increase profits
                                     demand_met = global_servers_in_stock * server["capacity"]
-
-                                    # breakpoint()
                                     
                                     if demand_met > base_demand:
                                         # In this case we really need to just sell or hold servers until demand goes up again
