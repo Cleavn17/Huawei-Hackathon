@@ -33,7 +33,6 @@ Parameters.MATRIX = {
 def get_my_solution(
         demand,
         path,
-        log,
         /,
         parameters=Parameters()
         
@@ -41,7 +40,7 @@ def get_my_solution(
     server_generations = ["GPU.S1", "GPU.S2", "GPU.S3", "CPU.S1", "CPU.S2", "CPU.S3", "CPU.S4"]
     latency_sensitivities = ["low", "high", "medium"]
     demand = pl.DataFrame(demand)
-    _, datacenters, servers, selling_prices = [pl.DataFrame(df) for df in load_problem_data()]
+    _, datacenters, servers, selling_prices, elasticity = [pl.DataFrame(df) for df in load_problem_data()]
     with open(path) as file:
         actions = pl.DataFrame(json.load(file))
 
@@ -94,9 +93,6 @@ def get_my_solution(
     
     for server_id, events in server_events.items():
         buy = events[0]
-        L_at_purchase = log[buy['time_step'] - 1]['L']
-        U_at_purchase = log[buy['time_step'] - 1]['U']
-        LU_at_purchase = L_at_purchase * U_at_purchase 
 
         # if L < 0.25:
         #     # The down payment on young servers is not relevant
@@ -111,7 +107,7 @@ def get_my_solution(
             elif event['action'] == 'dismiss':
                 dismiss = event
         
-        balance = - buy['purchase_price'] * LU_at_purchase
+        balance = - buy['purchase_price']
         capacity = buy['capacity']
 
         I = buy['latency_sensitivity']
@@ -130,8 +126,6 @@ def get_my_solution(
                 SUP = D / C
             else:
                 SUP = 1.0
-            L, U = log[k - 1]['L'], log[k - 1]['U']
-            LU = L * U
             if k in moves:
                 datacenter = costs[moves[k]['datacenter_id']]
                 buy['cost_of_energy'] = datacenter['cost_of_energy']

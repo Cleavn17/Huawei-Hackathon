@@ -10,15 +10,13 @@ args = parser.parse_args()
 
 seed = args.seed
 
-print(f'Evaluating seed {seed}')
-
 # LOAD SOLUTION
-solution = load_solution(args.file)
+fleet, pricing_strategy = load_solution(args.file)
 
 # LOAD PROBLEM DATA
-demand, datacenters, servers, selling_prices = load_problem_data()
+demand, datacenters, servers, selling_prices, elasticity = load_problem_data()
 
 # EVALUATE THE SOLUTION
-score, _ = evaluation_function(solution, demand, datacenters, servers, selling_prices, seed=seed, verbose=args.verbose, return_objective_log=True)
+score = evaluation_function(fleet, pricing_strategy, demand, datacenters, servers, selling_prices, elasticity, seed=seed, verbose=args.verbose)
 
-print(f'Solution score (seed={seed}): {score}')
+print(f'Solution score: {int(score):,}')

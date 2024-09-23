@@ -23,11 +23,12 @@ parser.add_argument('--seed', required=False, type=int)
 parser.add_argument('--mutate', required=False)
 parser.add_argument('--silent', const=False, dest="verbose", action="store_const", default=True)
 parser.add_argument('--session', default="session")
+parser.add_argument('--limit', type=int, default=168)
 args = parser.parse_args()
 
 seeds = [args.seed] if args.seed is not None else known_seeds('test')
 
-demand, datacenters, servers, selling_prices = load_problem_data()
+demand, datacenters, servers, selling_prices, elasticity = load_problem_data()
 
 for seed in seeds:
     print(f"RUNNING WITH SEED {seed}")
@@ -64,38 +65,73 @@ for seed in seeds:
         code = f'{N_j} | {T_j} | {seed}'
         print(code)
         
-        solution = bases.get(N_j) or get_my_solution(actual_demand, parameters=N) ; bases[N_j] = solution
-        solution_path = f'/tmp/{code}-unmutated.json'
-        with open(solution_path, 'w') as f: json.dump(solution, f)
-        (score, log) = bases_E[N_j] if N_j in bases_E else evaluation_function(load_solution(solution_path), demand, datacenters, servers, selling_prices, seed=seed, verbose=args.verbose, actual_demand=actual_demand, return_objective_log=True) ; bases_E[N_j] = (score, log)
+        solution = fleet, pricing_strategy = bases.get(N_j) or get_my_solution(actual_demand, parameters=N, limit=args.limit)
+        fleet, pricing_strategy = pd.DataFrame(fleet), pd.DataFrame(pricing_strategy)
+        bases[N_j] = solution
         
-        mutated_solution = mods.get((N_j, T_j)) or mutate(actual_demand, solution_path, log) ; mods[(N_j, T_j)] = mutated_solution
-        mutated_solution_path = f'/tmp/{code}-mutated.json'
-        with open(mutated_solution_path, 'w') as f: json.dump(mutated_solution, f)
-        mutated_score = mods_E[(N_j, T_j)] if (N_j, T_j) in mods_E else evaluation_function(load_solution(mutated_solution_path), demand, datacenters, servers, selling_prices, seed=seed, verbose=args.verbose, actual_demand=actual_demand) ; mods_E[(N_j, T_j)] = mutated_score
+        solution_path = f'/tmp/{code}-unmutated.json'
+        save_solution(fleet, pricing_strategy, solution_path)
+        
+        score = bases_E[N_j] if N_j in bases_E else evaluation_function(*load_solution(solution_path), demand, datacenters, servers, selling_prices, elasticity, seed=seed, verbose=args.verbose, actual_demand=actual_demand, time_steps=args.limit)
+        bases_E[N_j] = score
 
-        print(f'Got ({int(score):,}, {int(mutated_score):,}) for {code}')
+        mutated_score = 0.0
+        mutated_solution = solution
+        
+        # mutated_solution = mutated_fleet, mutated_pricing_strategy = mods.get((N_j, T_j)) or mutate(actual_demand, solution_path)
+        # mutated_fleet, mutated_pricing_strategy = pd.DataFrame(mutated_fleet), pd.DataFrame(mutated_pricing_strategy)
+        # mods[(N_j, T_j)] = mutated_solution
+        # 
+        # mutated_solution_path = f'/tmp/{code}-mutated.json'
+        # save_solution(mutated_fleet, mutated_pricing_strategy, mutated_solution_path)
+        # 
+        # mutated_score = mods_E[(N_j, T_j)] if (N_j, T_j) in mods_E else evaluation_function(*load_solution(mutated_solution_path), demand, datacenters, servers, selling_prices, elasticity, seed=seed, verbose=args.verbose, actual_demand=actual_demand, time_steps=args.limit)
+        # mods_E[(N_j, T_j)] = mutated_score
+        #
+        
         report = {
             'seed' : seed,
             'code' : code,
-            'path' : mutated_solution_path,
+            'path' : solution_path,
             'score' : score,
             'mutated_score' : mutated_score
         }
-        with open (f'/tmp/{code}-report.json', 'w') as f: json.dump(report, f)
+        
+        with open (f'/tmp/{code}-report.json', 'w') as f:
+            json.dump(report, f)
+            
         scores.append(report)
-        
-        if high_score is None or score > high_score:
-            high_score = score
+
+        if high_score is None or score > high_score or mutated_score > high_score:
+            report_path = join(args.session, "reports", f'{seed}.json')
+            solution_path = join(args.session, "solutions", f'{seed}.json')
+            maybe_high_score = max(high_score or 0.0, mutated_score, score)
+            
+            if Path(report_path).exists():
+                with open(report_path) as f: existing_report = json.load(f)
+                
+                existing_high_score = max(existing_report['score'], existing_report['mutated_score'])
+                if existing_high_score > maybe_high_score:
+                    print(f'\t⚠ Not writing as actual high score for {seed} is {existing_high_score} ({existing_report["code"]})')
+                    high_score = existing_high_score
+                    high_score_code = existing_report['code']
+                    continue
+            
+            if high_score is None or score > high_score:
+                print(f"Reached new high score !!!")
+                with open(solution_path, 'w') as f: json.dump(solution, f)
+                with open(report_path, 'w') as f: json.dump(report, f)
+
+            if high_score is None or mutated_score > high_score:
+                print(f"Reached new high score (MUTANT) !!!")
+                with open(solution_path, 'w') as f: save_solution(fleet, solution, f)
+                with open(report_path, 'w') as f: json.dump(report, f)
+
+            high_score = maybe_high_score
             high_score_code = code
-            print(f"REACHED NEW HIGH SCORE !!! {score} with {high_score_code}")
-            with open(join(args.session, "solutions", f'{seed}.json'), 'w') as f: json.dump(solution, f)
-            with open(join(args.session, "reports", f'{seed}.json'), 'w') as f: json.dump(report, f)
-        
-        if high_score is None or mutated_score > high_score:
-            high_score = mutated_score
-            high_score_code = code
-            print(f"REACHED NEW HIGH SCORE (MUTANT) !!! {high_score} with {high_score_code}")
-            with open(join(args.session, "solutions", f'{seed}.json'), 'w') as f: json.dump(mutated_solution, f)
-            with open(join(args.session, "reports", f'{seed}.json'), 'w') as f: json.dump(report, f)
+
+            print(f"\tseed: {seed}, score: {int(high_score):,}, code: {high_score_code}")
+
+        else:
+            print(f'Got ({int(score):,}, {int(mutated_score):,}) for {code}')
 

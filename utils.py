@@ -15,14 +15,19 @@ def save_json(path, data):
 
 
 def load_solution(path):
-    # Loads a solution from a json file to a pandas DataFrame.
-    return pd.read_json(path)
+    # Loads a solution from a json file to 2 pandas DataFrames.
+    solution = load_json(path)
+    fleet = pd.DataFrame(solution['fleet'])
+    pricing_strategy = pd.DataFrame(solution['pricing_strategy'])
+    return fleet, pricing_strategy
 
 
-def save_solution(solution, path):
+def save_solution(fleet, pricing_strategy, path):
     # Saves a solution into a json file.
-    if isinstance(solution, pd.DataFrame):
-        solution = solution.to_dict('records')
+    fleet = fleet.to_dict('records')
+    pricing_strategy = pricing_strategy.to_dict('records')
+    solution = {'fleet': fleet,
+                'pricing_strategy': pricing_strategy}
     return save_json(path, solution)
 
 
@@ -45,26 +50,16 @@ def load_problem_data(path=None):
     # LOAD SELLING PRICES DATA
     p = abspath(join(path, 'selling_prices.csv'))
     selling_prices = pd.read_csv(p)
-    return demand, datacenters, servers, selling_prices
+
+    # LOAD ELASTICITY DATA
+    p = abspath(join(path, 'price_elasticity_of_demand.csv'))
+    elasticity = pd.read_csv(p)
+    return demand, datacenters, servers, selling_prices, elasticity
 
 
 if __name__ == '__main__':
-
-
     # Load solution
     path = './data/solution_example.json'
-
-    solution = load_solution(path)
-
-    print(solution)
-
-
-    # Save solution
-    # path = './data/solution_example_test.json'
-    # save_solution(solution, path)
-
-
-
-
-
-
+    fleet, pricing_strategy = load_solution(path)
+    print(fleet)
+    print(pricing_strategy)
