@@ -44,7 +44,7 @@ while : ; do ssh codespace 'cd /workspaces/Huawei-Hackathon/kurd/solutions/ ; { 
 python3 mysolution.py --seed 123 --mutate output/123.json
 ```
 
-The time machine doesn't really work as well as I thought it would.
+The time machine doesn't really work as well as I thought it would (it never worked at all as we don't have proper profit accounting).
 
 ## Plotting
 
