@@ -220,7 +220,7 @@ def get_my_solution(
         demand_profiles = sorted(demand_profiles, key=lambda p: -p[2])
         expiry_pool = {}
         expiry_list = []
-        ages_dg = { k : v.with_columns(k=t - F('time_step'))['k'] for k, v in existing.items() }
+        dg_ages = { k : v.with_columns(k=t - F('time_step'))['k'] for k, v in existing.items() }
         
         for I, G, _ in demand_profiles:
             server = get_server_with_selling_price(I, G)
@@ -242,7 +242,7 @@ def get_my_solution(
 
                 # If the demand saturates our servers, ignore the fact that the future may be bleak and make hay while the sun shines
                 demands = { d['time_step'] : d[I] for d in ig_base_demand[G]['time_step', I].to_dicts() }
-                ages = ages_dg[(datacenter_id, G)]
+                ages = dg_ages[(datacenter_id, G)]
 
                 ig_demand_old       = int(ig_base_demand[G].filter(F('time_step').is_between(t - 1, t - 1 + parameters.expiry_lookahead))[I].mean() or 0)
                 ig_demand           = int(ig_base_demand[G].filter(F('time_step').is_between(t,     t     + parameters.expiry_lookahead))[I].mean() or 0)
@@ -344,9 +344,7 @@ def get_my_solution(
                         
                     if need > 0:
                         P = server["purchase_price"]
-                        
                         # When shit is sunshine and rainbows and there is some stock quantity we can purchase which is profitable even if the minimum demand was sustained for a very long time
-                        
                         other_perspective = np.clip(((ig_base_demand[G].filter(F('time_step').is_between(t, t + parameters.expiry_lookahead * 3))[I].min() or 0) - existing_capacity) / server["capacity"] / need, 0.0, 1.0)
                         if other_perspective < 1.0:
                             other_perspectives = [other_perspective]
@@ -398,7 +396,6 @@ def get_my_solution(
                                     elif demand_met <= base_demand:
                                         # In this case we can decrease the current demand by increasing the selling prices
                                         demand_delta = demand_met / base_demand - 1
-                                        # ratio = demand_met / base_demand - 1
                                         relevant_elasticity = ig_elasticity[I, G]['elasticity'][0]
                                         target_price = server["selling_price"] * (demand_delta / relevant_elasticity + 1)
                                         
