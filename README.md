@@ -3,7 +3,7 @@
 ## VENV Stuff
 
 ```
-… Install requirements.txt in a VENV / CONDA / whatever tickles your pickle
+… Install requirements.txt in a VENV / CONDA / whatever
 ```
 
 ## Preparing Solutions
