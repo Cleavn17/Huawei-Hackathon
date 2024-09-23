@@ -5,13 +5,10 @@
 
 import json
 import itertools
-import math
 from utils import load_problem_data
 import numpy as np
-import base64, struct
 import polars as pl
 from polars import col as F
-from functools import lru_cache
 from line_profiler import profile
 import logging
 from sys import stdout
