@@ -1,5 +1,4 @@
 import json
-from matplotlib.lines import lineStyles
 import matplotlib.pyplot as plt
 
 plt.style.use('dark_background')
