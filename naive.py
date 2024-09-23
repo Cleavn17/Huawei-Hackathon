@@ -300,21 +300,8 @@ def get_my_solution(
                 # servers_in_stock = DC_SCOPED_SERVERS.get((datacenter_id, G), 0)
                 # Use global perspective to maximise utilisation (minimise underutilisation)
                 servers_in_stock = sum(dc_scoped_servers.get((candidate['datacenter_id'], G), 0) for candidate in dbs[I])
-                if servers_in_stock > servers_needed:
-                    # demand_max = servers_in_stock * server["capacity"]
-                    # demand_delta = demand_max / base_demand - 1
-                    # relevant_elasticity = elasticity_IG[I, G]['elasticity'][0]
-                    # target_price = server["selling_price"] * (1 + (demand_delta - 1) / relevant_elasticity)
-                    # assert target_price < 0.0
-                    # logger.debug(f"(t={t} {I}-{G}) TEM: {demand_max}, ESAB: {base_demand}, ΔDᵢg: {demand_delta}, →$: {target_price}, og: {server['selling_price']}")
-                    # if new_strategy is None:
-                    #     new_strategy = create_pricing_strategy(I, G, target_price, t)
-                    #     # new_strategy = get_default_pricing_strategy_for_demand_segment(I, G, t=t)
-                    #     pass
-                    # modified_prices[(I, G)] = float(target_price)
-                    # modified_demands[(I, G)] = int(demand_max)
-                    pass
-                elif servers_in_stock < servers_needed:
+
+                if servers_in_stock < servers_needed:
                     
                     capacity_remaining = slots_capacity - slots_used_in_datacenter
                     assert capacity_remaining >= 0, f"capacity remaining ({capacity_remaining}) ought to be >=0"
