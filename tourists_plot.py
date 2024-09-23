@@ -1,3 +1,6 @@
+# This file written by "Tourists" team and published on the discussion
+# board. We only changed the theme!
+
 from collections import Counter
 import pandas as pd
 import matplotlib.pyplot as plt
