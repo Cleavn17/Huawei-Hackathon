@@ -246,17 +246,15 @@ def get_my_solution(
 
                 ig_demand_old       = int(ig_base_demand[G].filter(F('time_step').is_between(t - 1, t - 1 + parameters.expiry_lookahead))[I].mean() or 0)
                 ig_demand           = int(ig_base_demand[G].filter(F('time_step').is_between(t,     t     + parameters.expiry_lookahead))[I].mean() or 0)
-                ig_demand_next      = int(ig_base_demand[G].filter(F('time_step').is_between(t + 1, t + 1 + parameters.expiry_lookahead))[I].max() or 0)
-                ig_demand_next_next = int(ig_base_demand[G].filter(F('time_step').is_between(t + 2, t + 2 + parameters.expiry_lookahead))[I].max() or 0)
+                ig_demand_next      = int(ig_base_demand[G].filter(F('time_step').is_between(t + 1, t + 2 + parameters.expiry_lookahead))[I].max() or 0)
                 
                 servers_needed = ig_demand // server['capacity']
                 servers_needed_next = ig_demand_next // server['capacity']
-                servers_needed_next_next = ig_demand_next_next // server['capacity']
                 
                 # We do this to prevent selling a chip in one time step only to need it again in the next timestep due to the random noise added to
                 # the demand in the evaluation script. Though it's impact seems to be negligible
                 
-                excess = max(0, servers_in_stock - max(servers_needed, servers_needed_next, servers_needed_next_next))
+                excess = max(0, servers_in_stock - max(servers_needed, servers_needed_next))
 
                 if G not in expiry_pool:
                     expiry_pool[G] = []
