@@ -148,7 +148,6 @@ def get_my_solution(
         'slots_size' : pl.Int64,
     }
 
-    stocks = []
     balance_sheets = []
 
     stock = pl.DataFrame(schema=stock_schema)
@@ -579,9 +578,6 @@ def get_my_solution(
         _datacenters = { datacenter['datacenter_id'] : datacenter['slots_capacity'] for datacenter in datacenters.to_dicts() }
         logger.info(f"{t:3}: %s", ", ".join(f"DC{i + 1}: {slots.get(f'DC{i + 1}', 0):6} ({int(100*(slots.get(f'DC{i + 1}', 0)/_datacenters[f'DC{i + 1}'])):3}%)" for i in range(4)))
 
-        if return_stock_log:
-            stocks.append('')
-
         # make equivalents which make caches redundant (please god keep this up to date…)
         if assertions_enabled:
             db_scoped_servers = { k : len(v) for k, v in stock.group_by(['datacenter_id', 'server_generation']) }
@@ -605,12 +601,6 @@ def get_my_solution(
     with open("trace.json", "w") as f:
         json.dump(trace, f)
         
-    # actions = k # → 993267430.358398
-    # actions = actions # → 993023338.5467423
-    
-    if return_stock_log:
-        return actions, pricing_strategy, stocks
-    else:
         return actions, pricing_strategy
 
 if __name__ == "__main__":
