@@ -600,8 +600,8 @@ def get_my_solution(
 
     with open("trace.json", "w") as f:
         json.dump(trace, f)
-        
-        return actions, pricing_strategy
+    
+    return actions, pricing_strategy
 
 if __name__ == "__main__":
     demand, *_ = load_problem_data()
