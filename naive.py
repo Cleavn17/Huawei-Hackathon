@@ -495,12 +495,6 @@ def get_my_solution(
                 .select("latency_sensitivity", 'server_generation', pl.min_horizontal('capacity', 'demand') * F('selling_price'))['capacity'].sum() or 0
             C = stock.join(servers, on="server_generation").filter(F('time_step') == t)['purchase_price'].sum() or 0
             P = (R - C - E) or 0
-            U = stock.join(servers, on="server_generation") \
-                .select("latency_sensitivity", 'server_generation', 'capacity') \
-                .group_by(["latency_sensitivity", "server_generation"]) \
-                .agg(F('capacity').sum()) \
-                .join(restrucutred_demand, on=["server_generation", "latency_sensitivity"]) \
-                .select("latency_sensitivity", 'server_generation', pl.min_horizontal('capacity', 'demand') / F('capacity'))['capacity'].mean() or 0.0
             O = P
             logger.debug(f"{t:3}: O: {int(O):<11,}, P: {int(P):<11,} (R={int(R):<11,}, C={int(C):11,},  E={int(E):11,}), U: {U:3.02}")
             trace.append(P)
